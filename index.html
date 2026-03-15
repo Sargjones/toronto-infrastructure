@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Toronto Infrastructure Intelligence</title>
+<style>
+  :root {
+    --bg:       #f8f8f6;
+    --surface:  #ffffff;
+    --surface2: #f1efea;
+    --border:   rgba(0,0,0,0.10);
+    --border2:  rgba(0,0,0,0.18);
+    --text1:    #1a1a18;
+    --text2:    #5a5a56;
+    --text3:    #9a9a94;
+    --ok:       #3b6d11;
+    --ok-bg:    #eaf3de;
+    --warn:     #854f0b;
+    --warn-bg:  #faeeda;
+    --alert:    #a32d2d;
+    --alert-bg: #fcebeb;
+    --manual:   #888780;
+    --manual-bg:#f1efea;
+    --blue:     #185fa5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:       #1a1a18;
+      --surface:  #242422;
+      --surface2: #2e2e2c;
+      --border:   rgba(255,255,255,0.10);
+      --border2:  rgba(255,255,255,0.18);
+      --text1:    #f0efe8;
+      --text2:    #a8a8a0;
+      --text3:    #686860;
+      --ok:       #97c459;
+      --ok-bg:    #1e2e10;
+      --warn:     #ef9f27;
+      --warn-bg:  #2a1e08;
+      --alert:    #f09595;
+      --alert-bg: #2e1010;
+      --manual:   #68686a;
+      --manual-bg:#28282a;
+      --blue:     #85b7eb;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text1);
+    font-size: 15px;
+    line-height: 1.5;
+  }
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .topbar {
+    background: var(--surface);
+    border-bottom: 0.5px solid var(--border2);
+    padding: 0 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    height: 52px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  .topbar-left { display: flex; align-items: baseline; gap: 10px; }
+  .topbar-title { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+  .topbar-sub { font-size: 12px; color: var(--text3); }
+  .topbar-right { display: flex; align-items: center; gap: 12px; }
+  .refresh-btn {
+    font-size: 12px; padding: 5px 12px;
+    border: 0.5px solid var(--border2);
+    border-radius: 6px; background: transparent;
+    color: var(--text2); cursor: pointer;
+  }
+  .refresh-btn:hover { background: var(--surface2); }
+  .pulse { display: inline-block; width: 7px; height: 7px;
+    border-radius: 50%; background: var(--ok); margin-right: 5px;
+    animation: pulse 2.5s ease-in-out infinite; }
+  @keyframes pulse {
+    0%,100% { opacity: 1; } 50% { opacity: 0.3; }
+  }
+  #status-dot.warn  { background: var(--warn); animation: none; }
+  #status-dot.alert { background: var(--alert); animation: pulse 1s infinite; }
+  #status-dot.error { background: var(--alert); animation: none; opacity: .5; }
+
+  .main { max-width: 1100px; margin: 0 auto; padding: 1.5rem; }
+
+  .summary-bar {
+    display: flex; gap: 8px; flex-wrap: wrap;
+    margin-bottom: 1.5rem; align-items: center;
+  }
+  .pill {
+    font-size: 12px; padding: 3px 10px;
+    border-radius: 99px; font-weight: 500;
+  }
+  .pill-ok     { background: var(--ok-bg);     color: var(--ok); }
+  .pill-warn   { background: var(--warn-bg);   color: var(--warn); }
+  .pill-alert  { background: var(--alert-bg);  color: var(--alert); }
+  .pill-manual { background: var(--manual-bg); color: var(--manual); }
+  .pill-error  { background: var(--alert-bg);  color: var(--alert); opacity:.7; }
+  .summary-date { font-size: 12px; color: var(--text3); margin-left: auto; }
+
+  .alert-banner {
+    background: var(--alert-bg);
+    border: 0.5px solid var(--alert);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 1.25rem;
+    font-size: 13px;
+    color: var(--alert);
+  }
+  .alert-banner strong { font-weight: 600; }
+
+  .sector { margin-bottom: 1.75rem; }
+  .sector-header {
+    font-size: 11px; font-weight: 600; letter-spacing: .07em;
+    text-transform: uppercase; color: var(--text3);
+    margin-bottom: 8px; padding-bottom: 6px;
+    border-bottom: 0.5px solid var(--border);
+  }
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    gap: 8px;
+  }
+  .card {
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px 10px;
+    position: relative;
+    transition: border-color .15s;
+  }
+  .card:hover { border-color: var(--border2); }
+  .card.is-alert { border-color: var(--alert); background: var(--alert-bg); }
+  .card.is-warn  { border-color: var(--warn);  background: var(--warn-bg); }
+  .card.is-manual { opacity: .55; }
+
+  .card-dot {
+    position: absolute; top: 11px; right: 11px;
+    width: 7px; height: 7px; border-radius: 50%;
+  }
+  .dot-ok     { background: var(--ok); }
+  .dot-warn   { background: var(--warn); }
+  .dot-alert  { background: var(--alert); }
+  .dot-manual { background: var(--manual); }
+  .dot-error  { background: var(--alert); opacity: .5; }
+
+  .card-label {
+    font-size: 12px; color: var(--text2);
+    margin-bottom: 4px; padding-right: 16px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .card-value {
+    font-size: 22px; font-weight: 600;
+    letter-spacing: -.02em; line-height: 1.1;
+    color: var(--text1);
+  }
+  .card.is-alert .card-value { color: var(--alert); }
+  .card.is-warn  .card-value { color: var(--warn); }
+  .card.is-manual .card-value {
+    font-size: 13px; font-weight: 400;
+    color: var(--text3); margin-top: 2px;
+  }
+  .card-unit  { font-size: 11px; color: var(--text3); margin-top: 2px; }
+  .card-date  { font-size: 11px; color: var(--text3); margin-top: 6px; }
+  .card-note  {
+    font-size: 11px; color: var(--warn);
+    margin-top: 5px; line-height: 1.3;
+  }
+  .card.is-alert .card-note { color: var(--alert); }
+
+  .legend {
+    display: flex; gap: 16px; flex-wrap: wrap;
+    font-size: 12px; color: var(--text2);
+    margin-bottom: 1.25rem; align-items: center;
+  }
+  .legend-item { display: flex; align-items: center; gap: 5px; }
+  .legend-dot  { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+
+  .footer {
+    font-size: 11px; color: var(--text3);
+    border-top: 0.5px solid var(--border);
+    padding: 1rem 0 2rem;
+    margin-top: .5rem;
+    display: flex; justify-content: space-between;
+    flex-wrap: wrap; gap: 8px;
+  }
+
+  #loading {
+    text-align: center; padding: 4rem 0;
+    font-size: 14px; color: var(--text3);
+  }
+  #error-msg {
+    background: var(--alert-bg);
+    border: 0.5px solid var(--alert);
+    border-radius: 8px; padding: 1rem;
+    color: var(--alert); font-size: 13px;
+    margin: 2rem 0; display: none;
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-left">
+    <span class="topbar-title">Toronto Infrastructure Intelligence</span>
+    <span class="topbar-sub" id="topbar-sub">loading…</span>
+  </div>
+  <div class="topbar-right">
+    <span id="status-dot" class="pulse"></span>
+    <button class="refresh-btn" onclick="loadData()">Refresh</button>
+  </div>
+</div>
+
+<div class="main">
+  <div id="loading">Loading data…</div>
+  <div id="error-msg"></div>
+  <div id="dashboard" style="display:none">
+    <div class="summary-bar" id="summary-bar"></div>
+    <div id="alert-banners"></div>
+    <div class="legend">
+      <span class="legend-item"><span class="legend-dot dot-ok"></span>normal</span>
+      <span class="legend-item"><span class="legend-dot dot-warn"></span>watch</span>
+      <span class="legend-item"><span class="legend-dot dot-alert"></span>alert</span>
+      <span class="legend-item"><span class="legend-dot dot-manual"></span>manual retrieval</span>
+    </div>
+    <div id="sectors"></div>
+    <div class="footer">
+      <span id="footer-sources">Toronto Infrastructure Intelligence</span>
+      <span id="footer-run"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+const DATA_URL = "tii_data_latest.json";
+const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+
+const SECTOR_ORDER = ["energy","water","health","food","transport","environment","financial"];
+const SECTOR_LABELS = {
+  energy:"Energy", water:"Water", health:"Health",
+  food:"Food & prices", transport:"Transport",
+  environment:"Environment", financial:"Financial"
+};
+
+function inferSector(name) {
+  const n = (name||"").toLowerCase();
+  if(/nuclear|hydro|gas output|wind|solar|biofuel|demand|generation|brent|storage|grid|reserve/.test(n)) return "energy";
+  if(/water|shelter|watermain|wwtp/.test(n)) return "water";
+  if(/icu|er capacity|wastewater|blood/.test(n)) return "health";
+  if(/cpi|grocery|food bank|inflation/.test(n)) return "food";
+  if(/ttc|ridership|port|dwell/.test(n)) return "transport";
+  if(/aqhi|air quality|smog/.test(n)) return "environment";
+  if(/bank|rate|cad|usd|fuel|price|bankruptcy|insolvency|eviction/.test(n)) return "financial";
+  return "other";
+}
+
+function fmtValue(r) {
+  const v = r.value;
+  if(v === null || v === undefined) return "manual";
+  if(typeof v === "number") {
+    if(v >= 10000) return v.toLocaleString("en-CA", {maximumFractionDigits:0});
+    if(v >= 1000)  return v.toLocaleString("en-CA", {maximumFractionDigits:0});
+    if(v >= 100)   return v.toLocaleString("en-CA", {maximumFractionDigits:1});
+    if(v >= 1)     return v.toLocaleString("en-CA", {maximumFractionDigits:2});
+    return v.toLocaleString("en-CA", {maximumFractionDigits:4});
+  }
+  return String(v);
+}
+
+function fmtDate(d) {
+  if(!d) return "";
+  const s = String(d);
+  if(s.length >= 10) return s.slice(0,10);
+  return s;
+}
+
+function dotClass(s) {
+  return {ok:"dot-ok",warn:"dot-warn",alert:"dot-alert",
+          manual:"dot-manual",error:"dot-error"}[s] || "dot-manual";
+}
+
+function render(data) {
+  const results = data.results || [];
+  const t = data.totals || {};
+  const rd = (data.run_date || (data.run_timestamp||"").slice(0,10));
+
+  document.getElementById("loading").style.display = "none";
+  document.getElementById("dashboard").style.display = "block";
+  document.getElementById("topbar-sub").textContent = `${rd}`;
+
+  const dot = document.getElementById("status-dot");
+  dot.className = "pulse";
+  if((t.alert||0) > 0)     { dot.className = "alert"; }
+  else if((t.warn||0) > 0) { dot.className = "warn"; }
+
+  const bar = document.getElementById("summary-bar");
+  bar.innerHTML = "";
+  const pills = [
+    [t.ok,    "ok",     "ok"],
+    [t.warn,  "warn",   "warn"],
+    [t.alert, "alert",  "alert"],
+    [t.error, "error",  "errors"],
+    [t.manual,"manual", "manual"],
+  ];
+  for(const [n, cls, label] of pills) {
+    if(!n) continue;
+    const p = document.createElement("span");
+    p.className = `pill pill-${cls}`;
+    p.textContent = `${n} ${label}`;
+    bar.appendChild(p);
+  }
+  const dateSpan = document.createElement("span");
+  dateSpan.className = "summary-date";
+  dateSpan.textContent = `updated ${rd}`;
+  bar.appendChild(dateSpan);
+
+  const banners = document.getElementById("alert-banners");
+  banners.innerHTML = "";
+  const alerts = results.filter(r => r.status === "alert");
+  if(alerts.length > 0) {
+    const b = document.createElement("div");
+    b.className = "alert-banner";
+    b.innerHTML = "<strong>Active alerts:</strong> " +
+      alerts.map(r => `${r.indicator} (${fmtValue(r)} ${r.unit||""}) — ${r.threshold_note||""}`).join(" &nbsp;·&nbsp; ");
+    banners.appendChild(b);
+  }
+
+  const bySector = {};
+  for(const r of results) {
+    const s = r.sector || inferSector(r.indicator);
+    if(!bySector[s]) bySector[s] = [];
+    bySector[s].push(r);
+  }
+
+  const allKeys = [...SECTOR_ORDER];
+  for(const k of Object.keys(bySector)) {
+    if(!allKeys.includes(k)) allKeys.push(k);
+  }
+
+  const sectorsEl = document.getElementById("sectors");
+  sectorsEl.innerHTML = "";
+
+  for(const sKey of allKeys) {
+    const items = bySector[sKey];
+    if(!items || items.length === 0) continue;
+
+    const sec = document.createElement("div");
+    sec.className = "sector";
+    sec.innerHTML = `<div class="sector-header">${SECTOR_LABELS[sKey]||sKey}</div><div class="cards"></div>`;
+    const grid = sec.querySelector(".cards");
+
+    for(const r of items) {
+      const s = r.status || "manual";
+      const isManual = s === "manual" || r.value === null;
+      const card = document.createElement("div");
+      card.className = "card" + (s==="alert"?" is-alert":s==="warn"?" is-warn":isManual?" is-manual":"");
+
+      let noteHtml = "";
+      if(r.threshold_note && !isManual) {
+        noteHtml = `<div class="card-note">${r.threshold_note}</div>`;
+      }
+
+      card.innerHTML = `
+        <div class="card-dot ${dotClass(s)}"></div>
+        <div class="card-label">${r.indicator}</div>
+        <div class="card-value">${isManual ? "manual" : fmtValue(r)}</div>
+        ${!isManual ? `<div class="card-unit">${r.unit||""}</div>` : ""}
+        <div class="card-date">${fmtDate(r.data_date)}</div>
+        ${noteHtml}`;
+      grid.appendChild(card);
+    }
+    sectorsEl.appendChild(sec);
+  }
+
+  document.getElementById("footer-sources").textContent =
+    "Sources: IESO · Bank of Canada · StatsCan · Toronto Open Data · Environment Canada · data.ontario.ca · EIA · open.canada.ca";
+  document.getElementById("footer-run").textContent =
+    `TII v2.2 · scraper run ${rd} · auto-refresh every 5 min`;
+}
+
+function showError(msg) {
+  document.getElementById("loading").style.display = "none";
+  const e = document.getElementById("error-msg");
+  e.style.display = "block";
+  e.textContent = msg;
+}
+
+async function loadData() {
+  try {
+    const res = await fetch(DATA_URL + "?t=" + Date.now());
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    render(data);
+    document.getElementById("error-msg").style.display = "none";
+    document.getElementById("dashboard").style.display = "block";
+  } catch(e) {
+    if(document.getElementById("dashboard").style.display === "none") {
+      showError(`Could not load ${DATA_URL} — ${e.message}. ` +
+        "Place tii_data_latest.json in the same folder as this HTML file, " +
+        "or set DATA_URL to your JSON endpoint.");
+    }
+  }
+}
+
+loadData();
+setInterval(loadData, REFRESH_INTERVAL_MS);
+</script>
+</body>
+</html>
