@@ -1,4 +1,4 @@
-yamlname: TII data scraper
+name: TII data scraper
 
 on:
   schedule:
