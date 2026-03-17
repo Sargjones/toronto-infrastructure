@@ -2,8 +2,11 @@ name: TII data scraper
 
 on:
   schedule:
-    - cron: "0 */6 * * *"   # every 6 hours: 00:00, 06:00, 12:00, 18:00 UTC
-  workflow_dispatch:          # also allows manual trigger from GitHub Actions tab
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   scrape:
