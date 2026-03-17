@@ -1,5 +1,5 @@
 """
-Toronto Infrastructure Intelligence (TII) — Data Scraper v2.2
+Toronto Infrastructure Intelligence (TII) — Data Scraper v2.4
 ==============================================================
 Fixes vs v1.3:
   1. IESO XML: replaced BeautifulSoup(html.parser) with xml.etree.ElementTree
@@ -24,6 +24,7 @@ INSTALL
 """
 
 import argparse
+import os
 import csv
 import io
 import json
@@ -129,6 +130,15 @@ THRESHOLDS = [
         lambda v: v >= 4,   lambda v: v >= 7,
         "Moderate risk — AQHI 4-6",
         "High risk — AQHI 7+"),
+    # Water outages
+    ("Active Water Outages",
+        lambda v: v >= 3,  lambda v: v >= 8,
+        "Multiple active outages — monitor for escalation",
+        "High number of active outages — potential systemic stress"),
+    ("Active Watermain Breaks",
+        lambda v: v >= 2,  lambda v: v >= 5,
+        "Multiple active breaks — elevated infrastructure stress",
+        "High number of active breaks — systemic infrastructure alert"),
     # Food
     ("Grocery Price Inflation",
         lambda v: v > 170,  lambda v: v > 185,
@@ -785,6 +795,296 @@ def fetch_toronto_shelter():
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTOR: HEALTH
 # ══════════════════════════════════════════════════════════════════════════════
+
+def fetch_active_water_outages():
+    """
+    Toronto Water — active watermain breaks and planned outages.
+    Source: ArcGIS REST API behind toronto.ca/no-water-map
+    Updated in real time. Confirmed field names from live API inspection.
+
+    Key fields:
+      WaterOutageEdit7b_ReasonForShut  — numeric code for outage type
+      WaterOutageEdit7b_DateandTimeof  — epoch ms, when outage started
+      WaterOutageEdit7b_Address        — street address
+      EstRestorationDateTime           — epoch ms, estimated restoration
+      Est_Num_Properties_Affected      — number of properties affected
+      Comments                         — free text description
+
+    ReasonForShut domain codes queried from ArcGIS service info.
+    Falls back to Comments text parsing if domain lookup fails.
+    """
+    BASE = ("https://services3.arcgis.com/b9WvedVPoizGfvfD/arcgis/rest/services"
+            "/COT_Geospatial_Water_Outage_View/FeatureServer/0/query")
+    params = {
+        "where": "DateandTimeServiceRestored = NULL AND WaterOutageEdit7b_Bypass <> 1",
+        "outFields": ("WaterOutageEdit7b_ReasonForShut,WaterOutageEdit7b_DateandTimeof,"
+                      "WaterOutageEdit7b_Address,EstRestorationDateTime,"
+                      "Est_Num_Properties_Affected,Comments"),
+        "f": "geojson",
+        "returnGeometry": "false",
+    }
+    url = BASE
+
+    # Step 1: fetch domain codes from service info (best-effort)
+    # ReasonForShut is a coded value domain — get the lookup table
+    reason_codes = {}
+    try:
+        info_url = BASE.replace("/query", "?f=json")
+        ri = SESSION.get(info_url, timeout=10)
+        if ri.status_code == 200:
+            info = ri.json()
+            for field in info.get("fields", []):
+                if field.get("name") == "WaterOutageEdit7b_ReasonForShut":
+                    domain = field.get("domain", {})
+                    for cv in domain.get("codedValues", []):
+                        reason_codes[cv["code"]] = cv["name"]
+    except Exception:
+        pass  # domain lookup is best-effort; fall back to Comments parsing
+
+    # Step 2: fetch active outages
+    try:
+        r = SESSION.get(BASE, params=params, timeout=TIMEOUT)
+        r.raise_for_status()
+        data = r.json()
+    except (requests.RequestException, json.JSONDecodeError) as e:
+        return [_err("Active Water Outages", "Toronto Water ArcGIS API", url, str(e))]
+
+    if "error" in data:
+        return [_err("Active Water Outages", "Toronto Water ArcGIS API", url,
+                     f"API error: {data['error']}")]
+
+    features = data.get("features", [])
+    breaks   = 0
+    planned  = 0
+    other    = 0
+    total_props_affected = 0
+    oldest_start = None
+    addresses = []
+
+    from datetime import datetime as _dt, timezone as _tz
+
+    for feat in features:
+        p = feat.get("properties", {})
+
+        # Resolve outage type from domain code, then fall back to Comments text
+        code = p.get("WaterOutageEdit7b_ReasonForShut")
+        reason_name = reason_codes.get(code, "") if code is not None else ""
+        comment = str(p.get("Comments", "") or "").lower()
+
+        # Classify using resolved name first, then comment text
+        type_text = (reason_name + " " + comment).lower()
+        if any(k in type_text for k in ["break", "emergency", "watermain break", "burst"]):
+            breaks += 1
+        elif any(k in type_text for k in ["plan", "maintenance", "scheduled",
+                                           "precaution", "sewer", "construction"]):
+            planned += 1
+        else:
+            other += 1
+
+        # Properties affected
+        n = p.get("Est_Num_Properties_Affected")
+        if n:
+            try:
+                total_props_affected += int(n)
+            except (ValueError, TypeError):
+                pass
+
+        # Oldest active outage
+        ts = p.get("WaterOutageEdit7b_DateandTimeof")
+        if ts:
+            try:
+                dt = _dt.fromtimestamp(int(ts) / 1000, tz=_tz.utc)
+                if oldest_start is None or dt < oldest_start:
+                    oldest_start = dt
+            except (ValueError, OSError):
+                pass
+
+        # Collect addresses for notes
+        addr = p.get("WaterOutageEdit7b_Address", "")
+        if addr:
+            addresses.append(str(addr))
+
+    total = len(features)
+    oldest_str = (oldest_start.strftime("%Y-%m-%d %H:%M UTC")
+                  if oldest_start else "unknown")
+    addr_str = (", ".join(addresses[:3]) + ("..." if len(addresses) > 3 else "")
+                if addresses else "unknown")
+
+    note = (f"Breaks: {breaks}, Planned/precautionary: {planned}, Other: {other}. "
+            f"~{total_props_affected} properties affected. "
+            f"Oldest active since {oldest_str}. "
+            f"Locations: {addr_str}.")
+    if reason_codes:
+        note += f" Domain codes resolved: {reason_codes}."
+    else:
+        note += " Domain lookup unavailable — type classified from Comments text."
+
+    results = [_ok("Active Water Outages", total, "active outages",
+                   "Toronto Water — No Water Map (ArcGIS)", url,
+                   str(date.today()), note)]
+
+    if breaks > 0:
+        results.append(_ok("Active Watermain Breaks", breaks, "breaks",
+                           "Toronto Water — No Water Map (ArcGIS)", url,
+                           str(date.today()),
+                           f"Emergency watermain breaks. Addresses: {addr_str}"))
+    if planned > 0:
+        results.append(_ok("Planned/Precautionary Outages", planned, "outages",
+                           "Toronto Water — No Water Map (ArcGIS)", url,
+                           str(date.today()),
+                           "Planned maintenance or precautionary shutoffs."))
+
+    return results
+
+
+def fetch_toronto_shelter():
+    """Toronto Open Data — Daily Shelter. Unchanged — was working."""
+    pkg = _ckan_package("daily-shelter-overnight-service-occupancy-capacity")
+    if not pkg:
+        return [_err("Shelter System Capacity", "Toronto Open Data",
+                     TORONTO_CKAN_BASE, "Package not found")]
+
+    resource_id = next((r["id"] for r in pkg.get("resources", [])
+                        if r.get("datastore_active")), None)
+    if not resource_id:
+        return [_err("Shelter System Capacity", "Toronto Open Data",
+                     TORONTO_CKAN_BASE, "No active datastore resource")]
+
+    records = _ckan_datastore(resource_id, 3000, "OCCUPANCY_DATE desc")
+    if not records:
+        return [_err("Shelter System Capacity", "Toronto Open Data",
+                     TORONTO_CKAN_BASE, "Datastore empty or failed")]
+
+    most_recent_date = records[0].get("OCCUPANCY_DATE", "")
+    if not most_recent_date:
+        return [_err("Shelter System Capacity", "Toronto Open Data",
+                     TORONTO_CKAN_BASE, "OCCUPANCY_DATE field not found")]
+
+    day_recs = [rec for rec in records if rec.get("OCCUPANCY_DATE") == most_recent_date]
+    total_occ = total_cap = 0
+    for rec in day_recs:
+        for k in ["OCCUPANCY", "OCCUPIED_BEDS", "occupied_beds"]:
+            if k in rec:
+                try: total_occ += float(rec[k] or 0); break
+                except (ValueError, TypeError): pass
+        for k in ["CAPACITY_ACTUAL", "CAPACITY_ACTUAL_BED", "capacity_actual_bed"]:
+            if k in rec:
+                try: total_cap += float(rec[k] or 0); break
+                except (ValueError, TypeError): pass
+
+    occ_rate = round(total_occ / total_cap * 100, 1) if total_cap > 0 else None
+    api_url = f"{TORONTO_CKAN_BASE}/api/3/action/datastore_search?resource_id={resource_id}"
+    return [
+        _ok("Shelter System Capacity", int(total_cap), "beds/spaces",
+            "Toronto Open Data — Daily Shelter", api_url, most_recent_date,
+            f"{len(day_recs)} programs at 4am snapshot"),
+        _ok("Shelter Occupancy", int(total_occ), "occupied",
+            "Toronto Open Data — Daily Shelter", api_url, most_recent_date,
+            f"Occupancy rate: {occ_rate}%. Threshold: 95% = Warning"),
+    ]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTOR: HEALTH
+# ══════════════════════════════════════════════════════════════════════════════
+
+def fetch_active_water_outages():
+    """
+    Toronto Water — active watermain breaks and planned outages.
+    Source: City of Toronto ArcGIS REST API (COT_Geospatial_Water_Outage_View)
+    This is the live data feed behind toronto.ca/no-water-map.
+    Updated in real time as breaks are reported and restored.
+
+    Query: all records where DateandTimeServiceRestored = NULL
+    (i.e. service not yet restored = currently active)
+    and WaterOutageEdit7b_Bypass <> 1 (excludes test/bypass records)
+
+    Returns:
+    - Active watermain breaks count
+    - Active planned maintenance outages count
+    - Total active outages
+    """
+    BASE = ("https://services3.arcgis.com/b9WvedVPoizGfvfD/arcgis/rest/services"
+            "/COT_Geospatial_Water_Outage_View/FeatureServer/0/query")
+    params = {
+        "where": "DateandTimeServiceRestored = NULL AND WaterOutageEdit7b_Bypass <> 1",
+        "outFields": "*",
+        "f": "geojson",
+        "returnGeometry": "false",
+    }
+    url = BASE + "?" + "&".join(f"{k}={v}" for k, v in params.items())
+
+    try:
+        r = SESSION.get(BASE, params=params, timeout=TIMEOUT)
+        r.raise_for_status()
+        data = r.json()
+    except (requests.RequestException, json.JSONDecodeError) as e:
+        return [_err("Active Water Outages", "Toronto Water ArcGIS API", url, str(e))]
+
+    features = data.get("features", [])
+    if not features and "error" in data:
+        return [_err("Active Water Outages", "Toronto Water ArcGIS API", url,
+                     f"API error: {data['error']}")]
+
+    # Categorise by outage type
+    # Common type field names in Toronto Water ArcGIS: OutageType, Type, ReasonForOutage
+    breaks   = 0
+    planned  = 0
+    unknown  = 0
+    oldest_start = None
+
+    for feat in features:
+        props = feat.get("properties", {})
+        # Find the type field — try common names
+        type_val = (props.get("OutageType") or props.get("Type") or
+                    props.get("ReasonForOutage") or props.get("OUTAGETYPE") or "")
+        type_str = str(type_val).lower()
+
+        if any(k in type_str for k in ["break", "emergency", "watermain"]):
+            breaks += 1
+        elif any(k in type_str for k in ["planned", "maintenance", "scheduled"]):
+            planned += 1
+        else:
+            unknown += 1
+
+        # Track oldest active outage start time
+        start_ts = (props.get("DateandTimeServiceInterrupted") or
+                    props.get("StartDate") or props.get("DateTimeStart"))
+        if start_ts and isinstance(start_ts, (int, float)):
+            # ArcGIS returns epoch milliseconds
+            from datetime import datetime as _dt
+            try:
+                dt = _dt.utcfromtimestamp(start_ts / 1000)
+                if oldest_start is None or dt < oldest_start:
+                    oldest_start = dt
+            except (ValueError, OSError):
+                pass
+
+    total = len(features)
+    oldest_str = oldest_start.strftime("%Y-%m-%d %H:%M UTC") if oldest_start else "unknown"
+
+    results = [
+        _ok("Active Water Outages", total, "active outages",
+            "Toronto Water — No Water Map (ArcGIS)", url, str(date.today()),
+            f"Breaks: {breaks}, Planned maintenance: {planned}, Other: {unknown}. "
+            f"Oldest active since: {oldest_str}. "
+            f"Source: toronto.ca/no-water-map — real-time feed."),
+    ]
+
+    # Add breakdown indicators if there are active breaks
+    if breaks > 0:
+        results.append(_ok("Active Watermain Breaks", breaks, "breaks",
+                           "Toronto Water — No Water Map (ArcGIS)", url,
+                           str(date.today()),
+                           "Emergency watermain breaks with service interrupted."))
+    if planned > 0:
+        results.append(_ok("Planned Maintenance Outages", planned, "outages",
+                           "Toronto Water — No Water Map (ArcGIS)", url,
+                           str(date.today()),
+                           "Scheduled maintenance with planned service interruption."))
+
+    return results
+
 
 def fetch_ontario_er_capacity():
     """
@@ -1469,7 +1769,7 @@ def get_manual_placeholders():
 SECTOR_SCRAPERS = {
     "energy":      [fetch_ieso_generation_mix, fetch_ieso_ontario_demand,
                     fetch_natural_gas_storage, fetch_brent_crude],
-    "water":       [fetch_watermain_breaks, fetch_toronto_shelter],
+    "water":       [fetch_active_water_outages, fetch_toronto_shelter],
     "health":      [fetch_ontario_er_capacity, fetch_phac_wastewater,
                     fetch_ontario_icu_occupancy],
     "food":        [fetch_statcan_cpi],
@@ -1493,6 +1793,7 @@ def check_network_connectivity():
         "health-infobase.canada.ca":               "PHAC Wastewater",
         "www.bankofcanada.ca":                     "Bank of Canada",
         "ontario.ca":                              "Ontario fuel prices",
+        "services3.arcgis.com":                   "Toronto Water outages (ArcGIS)",
         "open.canada.ca":                          "OSB Insolvency",
     }
     print("\n  NETWORK CONNECTIVITY PRE-CHECK\n  " + "-"*54)
@@ -1515,7 +1816,161 @@ def check_network_connectivity():
     return reachable
 
 
-def run_all_scrapers(sector_filter=None, dry_run=False, skip_connectivity_check=False,
+# ── Intelligence Brief Generator ──────────────────────────────────────────
+BRIEF_SYSTEM_PROMPT = """You are the analytical voice of Toronto Infrastructure Intelligence (TII),
+a public infrastructure monitoring project tracking 12 critical sectors across Toronto and Ontario.
+
+Your job is to write a weekly intelligence brief based on the current indicator data provided.
+The brief is published on criticalto.ca under the byline "TII Analysis, with AI assistance."
+
+AUDIENCE: Informed general public — city-watchers, planners, journalists, engaged citizens.
+Slightly above mainstream news literacy. Teach them something without losing them.
+No jargon without explanation. No acronyms without spelling them out first.
+
+TONE: Clear, direct, authoritative but not alarmist. Measured when things are normal.
+Appropriately urgent when they are not. Never sensationalist.
+
+LENGTH: 200–500 words. Calibrate to how much is actually happening.
+A quiet week gets 200 words. An active week with multiple alerts gets 400–500.
+Never pad. Never repeat what the numbers already say — interpret them.
+
+STRUCTURE (use these exact markdown headers):
+## Situation this week
+One or two sentences. The single most important thing happening across all sectors.
+If nothing is elevated, say so plainly — stability is also newsworthy.
+
+## What the indicators are saying
+Only cover sectors where something is worth noting. Skip sectors that are normal and unchanged.
+Connect indicators across sectors where a through-line exists
+(e.g. Brent crude → CAD/USD → Toronto pump price → food inflation).
+This cross-sector narrative is TII's unique value — make it visible.
+
+## Watch list
+Two or three specific indicators to monitor in the coming week.
+For each: what level would trigger concern, and why it matters.
+
+## Data notes
+One brief paragraph. Be transparent about gaps, manual indicators, stale data.
+Builds trust. Never defensive — just honest.
+
+RULES:
+- Never invent data not in the JSON
+- Never speculate beyond what the indicators support
+- If an indicator is manual or null, note the gap rather than ignoring it
+- OutputQuality = -1 on IESO means estimated, not confirmed — note this if gas output is significant
+- Brent above $100 = Hormuz crisis threshold, significant context
+- CAD/USD above 1.45 = elevated tariff/import stress
+- Shelter occupancy above 95% = crisis threshold for Toronto's shelter system
+- AQHI 4–6 = moderate risk, 7+ = high risk
+- Write dates as "week of [date]" not raw ISO strings
+- End with: *TII Analysis, with AI assistance. Data sourced from IESO, Bank of Canada,
+  Statistics Canada, Toronto Open Data, Environment Canada, and other public sources.*
+"""
+
+def should_generate_brief(results, force=False):
+    """
+    Determine whether to generate a brief this run.
+    Weekly cadence (Mondays) OR any alert-status indicator OR force flag.
+    Returns (should_generate: bool, reason: str)
+    """
+    if force:
+        return True, "forced"
+    # Check for alert-level indicators — escalate to daily
+    alerts = [r for r in results if r.get("status") == "alert"]
+    if alerts:
+        alert_names = ", ".join(r["indicator"] for r in alerts[:3])
+        return True, f"alert escalation: {alert_names}"
+    # Weekly on Mondays (UTC)
+    if date.today().weekday() == 0:
+        return True, "weekly Monday run"
+    return False, "not scheduled (run on Monday or when alerts present)"
+
+
+def generate_brief(results, run_date, dry_run=False):
+    """
+    Call Claude API to generate the intelligence brief.
+    Returns the brief text, or None on failure.
+    """
+    # Prepare a clean summary of current indicators for the prompt
+    indicator_lines = []
+    for r in results:
+        status = r.get("status", "unknown")
+        value  = r.get("value")
+        unit   = r.get("unit", "")
+        ind    = r.get("indicator", "")
+        dd     = r.get("data_date", "")
+        tn     = r.get("threshold_note", "")
+        notes  = r.get("notes", "")[:120]
+
+        if status == "manual" or value is None:
+            indicator_lines.append(f"- {ind}: [manual — no automated data]")
+        else:
+            line = f"- {ind}: {value} {unit} (as of {dd}, status: {status})"
+            if tn:
+                line += f" ⚠ {tn}"
+            indicator_lines.append(line)
+
+    indicator_text = "\n".join(indicator_lines)
+
+    alert_count  = sum(1 for r in results if r.get("status") == "alert")
+    warn_count   = sum(1 for r in results if r.get("status") == "warn")
+    manual_count = sum(1 for r in results if r.get("status") == "manual")
+
+    user_message = f"""Generate a TII intelligence brief for the week of {run_date}.
+
+CURRENT INDICATOR DATA:
+{indicator_text}
+
+SUMMARY: {alert_count} alert-level indicators, {warn_count} watch-level, {manual_count} manual/gap.
+
+Write the brief now. Use the structure and rules from your instructions."""
+
+    if dry_run:
+        print("  [DRY RUN] Would call Claude API with prompt:")
+        print(f"  Indicators: {len(results)} total")
+        print(f"  Alert: {alert_count}, Warn: {warn_count}, Manual: {manual_count}")
+        return None
+
+    try:
+        import urllib.request as _urllib
+        payload = json.dumps({
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 1000,
+            "system": BRIEF_SYSTEM_PROMPT,
+            "messages": [{"role": "user", "content": user_message}]
+        }).encode("utf-8")
+
+        req = _urllib.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": os.environ.get("ANTHROPIC_API_KEY", ""),
+                "anthropic-version": "2023-06-01",
+            },
+            method="POST"
+        )
+        with _urllib.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data["content"][0]["text"]
+
+    except Exception as e:
+        print(f"  ⚠ Brief generation failed: {e}")
+        return None
+
+
+def save_brief(brief_text, run_date):
+    """Save brief as markdown files."""
+    date_str = str(run_date).replace("-", "")
+    header = f"# Toronto Infrastructure Intelligence\n*Week of {run_date}*\n\n"
+    full = header + brief_text
+    for path in [f"tii_brief_{date_str}.md", "tii_brief_latest.md"]:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(full)
+        print(f"  Brief written to: {path}")
+
+
+def run_all_scrapers(sector_filter=None, dry_run=False, skip_connectivity_check=False, force_brief=False,
                      print_generators=False):
     results = []
     if not skip_connectivity_check:
@@ -1596,6 +2051,18 @@ def run_all_scrapers(sector_filter=None, dry_run=False, skip_connectivity_check=
             gen_note = (f", {len(_IESO_GENERATOR_CACHE.get('generators', []))} generators"
                         if _IESO_GENERATOR_CACHE else "")
             print(f"  Output written to: {path}{gen_note}")
+
+    # ── Intelligence brief ────────────────────────────────────────────────
+    if not sector_filter:  # only generate brief on full runs, not sector-only
+        should, reason = should_generate_brief(results, force=force_brief)
+        if should:
+            print(f"\n  Generating intelligence brief ({reason})...")
+            brief = generate_brief(results, date.today(), dry_run=dry_run)
+            if brief and not dry_run:
+                save_brief(brief, date.today())
+        else:
+            print(f"\n  Brief skipped: {reason}")
+
     return results
 
 
@@ -1625,9 +2092,12 @@ OUTPUT FILES (written each run):
     parser.add_argument("--no-connectivity-check", action="store_true")
     parser.add_argument("--generators", action="store_true",
                         help="Print per-generator breakdown to console after run")
+    parser.add_argument("--force-brief", action="store_true",
+                        help="Force intelligence brief generation regardless of schedule")
     args = parser.parse_args()
     if args.check_network:
         check_network_connectivity(); sys.exit(0)
     run_all_scrapers(sector_filter=args.sector, dry_run=args.dry_run,
                      skip_connectivity_check=args.no_connectivity_check,
-                     print_generators=args.generators)
+                     print_generators=args.generators,
+                     force_brief=args.force_brief)
