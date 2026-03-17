@@ -241,7 +241,8 @@
 </div>
 
 <script>
-const DATA_URL = "https://raw.githubusercontent.com/Sargjones/toronto-infrastructure/main/tii_data_latest.json";
+const DATA_URL = "https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/tii/main/tii_data_latest.json";
+  // Replace YOUR_GITHUB_USERNAME above with your actual GitHub username
 const REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 
 const SECTOR_ORDER = ["energy","water","health","food","transport","environment","financial"];
@@ -253,7 +254,7 @@ const SECTOR_LABELS = {
 
 function inferSector(name) {
   const n = (name||"").toLowerCase();
-  if(/nuclear|hydro|gas output|wind|solar|biofuel|demand|generation|brent|storage|grid|reserve/.test(n)) return "energy";
+  if(/nuclear|hydro|gas output|wind|solar|biofuel|ontario demand|peak demand|generation|brent|storage|grid|reserve/.test(n)) return "energy";
   if(/water|shelter|watermain|wwtp/.test(n)) return "water";
   if(/icu|er capacity|wastewater|blood/.test(n)) return "health";
   if(/cpi|grocery|food bank|inflation/.test(n)) return "food";
@@ -384,7 +385,7 @@ function render(data) {
   document.getElementById("footer-sources").textContent =
     "Sources: IESO · Bank of Canada · StatsCan · Toronto Open Data · Environment Canada · data.ontario.ca · EIA · open.canada.ca";
   document.getElementById("footer-run").textContent =
-    `TII v2.2 · scraper run ${rd} · auto-refresh every 5 min`;
+    `TII v2.2 · scraper run ${rd} · auto-refresh every 15 min`;
 }
 
 function showError(msg) {
