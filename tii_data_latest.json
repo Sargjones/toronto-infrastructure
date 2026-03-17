@@ -1,5 +1,5 @@
 {
-  "run_timestamp": "2026-03-17T01:27:51.010927Z",
+  "run_timestamp": "2026-03-17T06:56:41.373123Z",
   "run_date": "2026-03-17",
   "sector_filter": null,
   "totals": {
@@ -16,7 +16,7 @@
       "unit": "MW",
       "source": "IESO GenOutputbyFuelHourly",
       "url": "https://reports-public.ieso.ca/public/GenOutputbyFuelHourly/PUB_GenOutputbyFuelHourly_2026.xml",
-      "retrieved_at": "2026-03-17T01:27:38.066886Z",
+      "retrieved_at": "2026-03-17T06:56:30.107215Z",
       "data_date": "2026-03-17 Hour 24",
       "status": "ok",
       "notes": "Hour 24. Fuel mix: {'NUCLEAR': 9664.0, 'GAS': 1043.0, 'HYDRO': 3378.0, 'WIND': 4172.0, 'SOLAR': 0.0, 'BIOFUEL': 16.0, 'OTHER': 1.0}"
@@ -27,7 +27,7 @@
       "unit": "MW",
       "source": "IESO GenOutputbyFuelHourly",
       "url": "https://reports-public.ieso.ca/public/GenOutputbyFuelHourly/PUB_GenOutputbyFuelHourly_2026.xml",
-      "retrieved_at": "2026-03-17T01:27:38.066892Z",
+      "retrieved_at": "2026-03-17T06:56:30.107219Z",
       "data_date": "2026-03-17 Hour 24",
       "status": "ok",
       "notes": ""
@@ -38,7 +38,7 @@
       "unit": "MW",
       "source": "IESO GenOutputbyFuelHourly",
       "url": "https://reports-public.ieso.ca/public/GenOutputbyFuelHourly/PUB_GenOutputbyFuelHourly_2026.xml",
-      "retrieved_at": "2026-03-17T01:27:38.066894Z",
+      "retrieved_at": "2026-03-17T06:56:30.107221Z",
       "data_date": "2026-03-17 Hour 24",
       "status": "ok",
       "notes": ""
@@ -49,7 +49,7 @@
       "unit": "MW",
       "source": "IESO GenOutputbyFuelHourly",
       "url": "https://reports-public.ieso.ca/public/GenOutputbyFuelHourly/PUB_GenOutputbyFuelHourly_2026.xml",
-      "retrieved_at": "2026-03-17T01:27:38.066896Z",
+      "retrieved_at": "2026-03-17T06:56:30.107223Z",
       "data_date": "2026-03-17 Hour 24",
       "status": "ok",
       "notes": ""
@@ -60,7 +60,7 @@
       "unit": "MW",
       "source": "IESO GenOutputbyFuelHourly",
       "url": "https://reports-public.ieso.ca/public/GenOutputbyFuelHourly/PUB_GenOutputbyFuelHourly_2026.xml",
-      "retrieved_at": "2026-03-17T01:27:38.066898Z",
+      "retrieved_at": "2026-03-17T06:56:30.107225Z",
       "data_date": "2026-03-17 Hour 24",
       "status": "ok",
       "notes": ""
@@ -71,7 +71,7 @@
       "unit": "MW",
       "source": "IESO GenOutputbyFuelHourly",
       "url": "https://reports-public.ieso.ca/public/GenOutputbyFuelHourly/PUB_GenOutputbyFuelHourly_2026.xml",
-      "retrieved_at": "2026-03-17T01:27:38.066899Z",
+      "retrieved_at": "2026-03-17T06:56:30.107226Z",
       "data_date": "2026-03-17 Hour 24",
       "status": "ok",
       "notes": ""
@@ -82,7 +82,7 @@
       "unit": "MW",
       "source": "IESO GenOutputbyFuelHourly",
       "url": "https://reports-public.ieso.ca/public/GenOutputbyFuelHourly/PUB_GenOutputbyFuelHourly_2026.xml",
-      "retrieved_at": "2026-03-17T01:27:38.066901Z",
+      "retrieved_at": "2026-03-17T06:56:30.107228Z",
       "data_date": "2026-03-17 Hour 24",
       "status": "ok",
       "notes": ""
@@ -93,7 +93,7 @@
       "unit": "MW",
       "source": "IESO Ontario Demand Multiday",
       "url": "https://www.ieso.ca/-/media/Files/IESO/Power-Data/Ontario-Demand-multiday.ashx",
-      "retrieved_at": "2026-03-17T01:27:38.532076Z",
+      "retrieved_at": "2026-03-17T06:56:30.545373Z",
       "data_date": "2026-03-17",
       "status": "ok",
       "notes": ""
@@ -104,7 +104,7 @@
       "unit": "% of 2024 peak",
       "source": "IESO Ontario Demand Multiday",
       "url": "https://www.ieso.ca/-/media/Files/IESO/Power-Data/Ontario-Demand-multiday.ashx",
-      "retrieved_at": "2026-03-17T01:27:38.532089Z",
+      "retrieved_at": "2026-03-17T06:56:30.545385Z",
       "data_date": "2026-03-17",
       "status": "ok",
       "notes": "13513.1 MW ÷ 25000 MW × 100"
@@ -115,7 +115,7 @@
       "unit": "BCM",
       "source": "StatsCan WDS API — Table 25-10-0057-01",
       "url": "https://www150.statcan.gc.ca/t1/wds/rest/getDataFromVectorsAndLatestNPeriods",
-      "retrieved_at": "2026-03-17T01:27:39.440399Z",
+      "retrieved_at": "2026-03-17T06:56:31.443480Z",
       "data_date": "2025-12-01",
       "status": "warn",
       "notes": "Vector v65201762. Raw: 37447 m³. Note: if value is 0.0, vector may be wrong — check StatsCan Table 25-10-0057-01 to find correct Ontario closing inventory vector. Lags ~45 days.",
@@ -127,7 +127,7 @@
       "unit": "USD/bbl",
       "source": "EIA Brent Spot Price (RBRTE)",
       "url": "https://api.eia.gov/v2/petroleum/pri/spt/data/?api_key=DEMO_KEY&frequency=weekly&data[0]=value&facets[series][]=RBRTE&sort[0][column]=period&sort[0][direction]=desc&length=2",
-      "retrieved_at": "2026-03-17T01:27:42.078510Z",
+      "retrieved_at": "2026-03-17T06:56:34.346408Z",
       "data_date": "2026-03-06",
       "status": "warn",
       "notes": "Weekly. Register free key at eia.gov/opendata to lift rate limit.",
@@ -139,7 +139,7 @@
       "unit": "records (no dates parsed)",
       "source": "Toronto Open Data — Water Main Breaks (XML)",
       "url": "https://ckan0.cf.opendata.inter.prod-toronto.ca/dataset/c1339013-2f0f-4a5a-8233-625daef69102/resource/29b63a2b-66bb-4328-b19d-6174465e61e7/download/watermain-breaks-1990-to-2016-excel.xlsx",
-      "retrieved_at": "2026-03-17T01:27:43.621361Z",
+      "retrieved_at": "2026-03-17T06:56:34.957151Z",
       "data_date": "unknown",
       "status": "ok",
       "notes": "XML tags: ['Default', 'Override', 'Types']. No date values found. Manual review needed."
@@ -150,7 +150,7 @@
       "unit": "beds/spaces",
       "source": "Toronto Open Data — Daily Shelter",
       "url": "https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/datastore_search?resource_id=42714176-4f05-44e6-b157-2b57f29b856a",
-      "retrieved_at": "2026-03-17T01:27:44.574571Z",
+      "retrieved_at": "2026-03-17T06:56:35.567619Z",
       "data_date": "2026-03-15",
       "status": "ok",
       "notes": "145 programs at 4am snapshot"
@@ -161,7 +161,7 @@
       "unit": "occupied",
       "source": "Toronto Open Data — Daily Shelter",
       "url": "https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action/datastore_search?resource_id=42714176-4f05-44e6-b157-2b57f29b856a",
-      "retrieved_at": "2026-03-17T01:27:44.574589Z",
+      "retrieved_at": "2026-03-17T06:56:35.567628Z",
       "data_date": "2026-03-15",
       "status": "warn",
       "notes": "Occupancy rate: 96.4%. Threshold: 95% = Warning",
@@ -173,7 +173,7 @@
       "unit": null,
       "source": "data.ontario.ca / Health Quality Ontario",
       "url": null,
-      "retrieved_at": "2026-03-17T01:27:45.093636Z",
+      "retrieved_at": "2026-03-17T06:56:36.152429Z",
       "data_date": null,
       "status": "manual",
       "notes": "Dataset exists but has no downloadable files (data in reporting portal). Manual retrieval: health.gov.on.ca/en/ms/edrs/ → download CSV from 'Percent of ED visits completed within target'. Or check data.ontario.ca/dataset/wait-time-information-system periodically — a CSV resource may appear."
@@ -184,7 +184,7 @@
       "unit": null,
       "source": "PHAC Wastewater Dashboard",
       "url": null,
-      "retrieved_at": "2026-03-17T01:27:46.107173Z",
+      "retrieved_at": "2026-03-17T06:56:36.672531Z",
       "data_date": null,
       "status": "manual",
       "notes": "SPA — visit health-infobase.canada.ca/wastewater/ → DevTools → Network → find JSON/CSV endpoint. Levels: Low / Moderate / High."
@@ -195,7 +195,7 @@
       "unit": null,
       "source": "Public Health Ontario Respiratory Virus Tool",
       "url": null,
-      "retrieved_at": "2026-03-17T01:27:46.366614Z",
+      "retrieved_at": "2026-03-17T06:56:36.868873Z",
       "data_date": null,
       "status": "manual",
       "notes": "The COVID-era data.ontario.ca ICU dataset was discontinued Nov 14, 2024. CCSO data is restricted to authorized hospital users (PHIPA). Manual retrieval: publichealthontario.ca → Data & Analysis → Respiratory Virus Tool → Hospital/ICU tab. Will auto-fetch if data.ontario.ca dataset is reinstated."
@@ -206,7 +206,7 @@
       "unit": "CPI index (2002=100)",
       "source": "StatsCan WDS API (Table 18-10-0004-01)",
       "url": "https://www150.statcan.gc.ca/t1/wds/rest/getDataFromVectorsAndLatestNPeriods",
-      "retrieved_at": "2026-03-17T01:27:47.125013Z",
+      "retrieved_at": "2026-03-17T06:56:37.494611Z",
       "data_date": "2026-02-01",
       "status": "ok",
       "notes": "Vector v41690973. Canada-wide, not seasonally adjusted. Released ~6 weeks after reference month."
@@ -217,7 +217,7 @@
       "unit": "CPI index (2002=100)",
       "source": "StatsCan WDS API (Table 18-10-0004-01)",
       "url": "https://www150.statcan.gc.ca/t1/wds/rest/getDataFromVectorsAndLatestNPeriods",
-      "retrieved_at": "2026-03-17T01:27:47.125023Z",
+      "retrieved_at": "2026-03-17T06:56:37.494621Z",
       "data_date": "2025-01-01",
       "status": "ok",
       "notes": "Vector v41693271. Canada-wide, not seasonally adjusted. Released ~6 weeks after reference month."
@@ -228,18 +228,18 @@
       "unit": null,
       "source": "TTC Monthly KPI Reports (PDF)",
       "url": null,
-      "retrieved_at": "2026-03-17T01:27:47.672857Z",
+      "retrieved_at": "2026-03-17T06:56:37.976045Z",
       "data_date": null,
       "status": "manual",
       "notes": "No live open data feed available. Current ridership in monthly KPI PDFs: ttc.ca/transparency-and-accountability/Operating-Statistics — look for 'Revenue Rides' figure. Toronto Open Data only has 1985-2019 historical XLSX. Will auto-fetch if a live resource appears on the package."
     },
     {
       "indicator": "Air Quality (AQHI)",
-      "value": 3,
+      "value": 2,
       "unit": "AQHI (1-10+)",
       "source": "Environment Canada AQHI — Toronto",
       "url": "https://weather.gc.ca/airquality/pages/onaq-001_e.html",
-      "retrieved_at": "2026-03-17T01:27:47.964928Z",
+      "retrieved_at": "2026-03-17T06:56:38.218433Z",
       "data_date": "2026-03-17",
       "status": "ok",
       "notes": "Risk: Low Risk. Alert threshold: AQHI ≥ 4."
@@ -250,7 +250,7 @@
       "unit": "%",
       "source": "Bank of Canada (known value — Valet API series not resolved)",
       "url": "",
-      "retrieved_at": "2026-03-17T01:27:48.546596Z",
+      "retrieved_at": "2026-03-17T06:56:39.057622Z",
       "data_date": "2025-10-29",
       "status": "ok",
       "notes": "⚠ Valet API series name unresolved. Known: 2.25% since Oct 29, 2025. Verify at bankofcanada.ca/valet/docs"
@@ -261,7 +261,7 @@
       "unit": "USD/CAD",
       "source": "Bank of Canada Valet API (FXUSDCAD)",
       "url": "https://www.bankofcanada.ca/valet/observations/FXUSDCAD/json?recent=5",
-      "retrieved_at": "2026-03-17T01:27:48.555592Z",
+      "retrieved_at": "2026-03-17T06:56:39.265319Z",
       "data_date": "2026-03-10",
       "status": "ok",
       "notes": "Daily closing rate (-0.0020 vs prev day). Alert threshold: >1.45 (elevated tariff/import stress). Published 16:30 ET on business days."
@@ -272,7 +272,7 @@
       "unit": "¢/L",
       "source": "Ontario Fuel Price Survey (Kalibrate)",
       "url": "https://ontario.ca/v1/files/fuel-prices/fueltypesall.csv",
-      "retrieved_at": "2026-03-17T01:27:49.918454Z",
+      "retrieved_at": "2026-03-17T06:56:40.524362Z",
       "data_date": "2026-03-09",
       "status": "warn",
       "notes": "Columns used: Toronto West/Ouest, Toronto East/Est. Weekly survey, published Mondays. Connects to: Brent crude → CAD/USD → pump price chain.",
@@ -284,7 +284,7 @@
       "unit": "filings/month (Ontario)",
       "source": "OSB Canada — open.canada.ca",
       "url": "https://ised-isde.canada.ca/site/office-superintendent-bankruptcy/sites/default/files/documents/insolvency_statistiques_insolvabilite_jan_2026.xlsx",
-      "retrieved_at": "2026-03-17T01:27:51.010813Z",
+      "retrieved_at": "2026-03-17T06:56:41.373031Z",
       "data_date": "jan/janv",
       "status": "ok",
       "notes": "Ontario consumer insolvencies. Canada 2025: 140,457 annual (~11,705/month). Ontario 2025: 52,838 (~4,403/month)."
@@ -295,7 +295,7 @@
       "unit": null,
       "source": "IESO Reliability Outlook (quarterly PDF)",
       "url": null,
-      "retrieved_at": "2026-03-17T01:27:51.010868Z",
+      "retrieved_at": "2026-03-17T06:56:41.373071Z",
       "data_date": null,
       "status": "manual",
       "notes": "ieso.ca → Planning and Forecasting → Reliability Outlook → latest PDF. Find 'Reserve Above Requirement' figure. Update quarterly."
@@ -306,7 +306,7 @@
       "unit": null,
       "source": "City of Toronto WWTP Annual Reports (annual PDF)",
       "url": null,
-      "retrieved_at": "2026-03-17T01:27:51.010871Z",
+      "retrieved_at": "2026-03-17T06:56:41.373074Z",
       "data_date": null,
       "status": "manual",
       "notes": "toronto.ca WWTP reports → download all 4 plant PDFs (~March 31). Section B = ECA compliance table."
@@ -317,7 +317,7 @@
       "unit": null,
       "source": "Canadian Blood Services",
       "url": null,
-      "retrieved_at": "2026-03-17T01:27:51.010872Z",
+      "retrieved_at": "2026-03-17T06:56:41.373075Z",
       "data_date": null,
       "status": "manual",
       "notes": "No public API. blood.ca for status. Contact media@blood.ca."
@@ -328,7 +328,7 @@
       "unit": null,
       "source": "Daily Bread Food Bank (quarterly PDF)",
       "url": null,
-      "retrieved_at": "2026-03-17T01:27:51.010874Z",
+      "retrieved_at": "2026-03-17T06:56:41.373077Z",
       "data_date": null,
       "status": "manual",
       "notes": "dailybread.ca/research-and-advocacy/ → quarterly reports."
@@ -339,7 +339,7 @@
       "unit": null,
       "source": "LTB Quarterly Statistics PDF",
       "url": null,
-      "retrieved_at": "2026-03-17T01:27:51.010876Z",
+      "retrieved_at": "2026-03-17T06:56:41.373078Z",
       "data_date": null,
       "status": "manual",
       "notes": "tribunalsontario.ca/ltb/resources/ → Statistics PDF."
@@ -350,7 +350,7 @@
       "unit": null,
       "source": "Toronto Water Source Monitoring Reports",
       "url": null,
-      "retrieved_at": "2026-03-17T01:27:51.010878Z",
+      "retrieved_at": "2026-03-17T06:56:41.373080Z",
       "data_date": null,
       "status": "manual",
       "notes": "toronto.ca/services-payments/water-environment/water-treatment/drinking-water-quality-monitoring-reports/"
@@ -361,14 +361,14 @@
       "unit": null,
       "source": "Port of Montreal Statistics",
       "url": null,
-      "retrieved_at": "2026-03-17T01:27:51.010879Z",
+      "retrieved_at": "2026-03-17T06:56:41.373081Z",
       "data_date": null,
       "status": "manual",
       "notes": "port-montreal.com/en/operations/port-statistics → monthly PDF."
     }
   ],
   "ieso_generators": {
-    "retrieved_at": "2026-03-17T01:27:38.066784Z",
+    "retrieved_at": "2026-03-17T06:56:30.107139Z",
     "data_date": "2026-03-17",
     "hour": 24,
     "source_url": "https://reports-public.ieso.ca/public/GenOutputbyFuelHourly/PUB_GenOutputbyFuelHourly_2026.xml",
