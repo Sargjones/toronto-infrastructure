@@ -1,5 +1,5 @@
 """
-Toronto Infrastructure Intelligence (TII) — Data Scraper v2.4
+Toronto Infrastructure Intelligence (TII) — Data Scraper v2.5
 ==============================================================
 Fixes vs v1.3:
   1. IESO XML: replaced BeautifulSoup(html.parser) with xml.etree.ElementTree
@@ -107,6 +107,11 @@ THRESHOLDS = [
         lambda v: v > 15,   lambda v: v > 25,
         "Elevated break rate — above seasonal average",
         "Critical break rate — infrastructure stress"),
+    # Labour market
+    ("Toronto Unemployment Rate",
+        lambda v: v > 8.0,  lambda v: v > 10.0,
+        "Unemployment elevated — above 8% (high vs pre-tariff baseline)",
+        "Unemployment at recession level — above 10%"),
     # Financial
     ("CAD/USD Exchange Rate",
         lambda v: v > 1.40, lambda v: v > 1.50,
@@ -130,6 +135,11 @@ THRESHOLDS = [
         lambda v: v >= 4,   lambda v: v >= 7,
         "Moderate risk — AQHI 4-6",
         "High risk — AQHI 7+"),
+    # Boil water advisory — any active advisory is an immediate alert
+    ("Boil Water Advisories",
+        lambda v: v >= 1,  lambda v: v >= 1,
+        "Active boil water advisory — public health signal",
+        "Active boil water advisory — significant public health event"),
     # Water outages
     ("Active Water Outages",
         lambda v: v >= 3,  lambda v: v >= 8,
@@ -1086,6 +1096,121 @@ def fetch_active_water_outages():
     return results
 
 
+def fetch_toronto_unemployment():
+    """
+    Toronto CMA unemployment rate — StatsCan WDS API.
+    Table 14-10-0294-01: Labour force characteristics by CMA, 3-month moving average.
+    Coordinate 23.5.1.1 = Toronto CMA, Unemployment rate, Estimate, Seasonally adjusted.
+    Released monthly, lags ~5 weeks after reference month.
+    Context: Toronto CMA at 8.9% in Sep 2025 — elevated vs pre-tariff levels.
+    Alert threshold: >10% = recession-level stress.
+    """
+    WDS_URL = "https://www150.statcan.gc.ca/t1/wds/rest/getDataFromCubePidCoordAndLatestNPeriods"
+    # productId=14100294, coordinate=23.5.1.1 (Toronto, Unemployment rate, Estimate, SA)
+    payload = [{"productId": 14100294, "coordinate": "23.5.1.1", "latestN": 2}]
+
+    try:
+        r = SESSION.post(WDS_URL, json=payload, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+    except (requests.RequestException, json.JSONDecodeError) as e:
+        return [_err("Toronto Unemployment Rate", "StatsCan WDS (Table 14-10-0294-01)",
+                     WDS_URL, str(e))]
+
+    try:
+        obj = data[0].get("object", {})
+        if data[0].get("status") != "SUCCESS":
+            raise ValueError(f"API status: {data[0].get('status')} — {obj}")
+        points = obj.get("vectorDataPoint", [])
+        if not points:
+            raise ValueError("No data points returned")
+        latest = points[-1]
+        rate = float(latest["value"])
+        ref = latest.get("refPer", "unknown")
+        vector_id = obj.get("vectorId", "?")
+    except (KeyError, ValueError, TypeError, IndexError) as e:
+        return [_err("Toronto Unemployment Rate", "StatsCan WDS (Table 14-10-0294-01)",
+                     WDS_URL, f"Parse error: {e}. Response: {str(data)[:200]}")]
+
+    return [_ok("Toronto Unemployment Rate", round(rate, 1), "%",
+                "StatsCan LFS — Table 14-10-0294-01 (Toronto CMA)", WDS_URL, ref,
+                f"3-month moving average, seasonally adjusted. "
+                f"Vector v{vector_id}. Released ~5 weeks after reference month. "
+                f"Sep 2025: 8.9%. Pre-tariff baseline (2023): ~6.5%.")]
+
+
+def fetch_toronto_boil_advisories():
+    """
+    Toronto Water — active boil water advisories.
+    Scrapes toronto.ca drinking water quality page.
+    Toronto's water system is large and well-maintained — advisories are rare.
+    A non-zero count is a significant public health signal.
+    Alert threshold: any active advisory = alert (zero is normal).
+    """
+    # Primary: Toronto Water drinking water advisories page
+    urls_to_try = [
+        "https://www.toronto.ca/services-payments/water-environment/tap-water-in-toronto/",
+        "https://www.toronto.ca/services-payments/water-environment/tap-water-in-toronto/drinking-water-compliance-and-testing/",
+    ]
+
+    advisory_count = 0
+    advisory_details = []
+    source_url = urls_to_try[0]
+
+    for url in urls_to_try:
+        try:
+            r = SESSION.get(url, timeout=TIMEOUT,
+                            headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.5"})
+            r.raise_for_status()
+            from bs4 import BeautifulSoup as _BS
+            soup = _BS(r.content, "html.parser")
+            text = soup.get_text(" ", strip=True).lower()
+
+            # Look for advisory language
+            if "boil water" in text or "boil-water" in text:
+                # Count specific advisory mentions
+                advisory_keywords = [
+                    "boil water advisory", "boil-water advisory",
+                    "do not use", "water advisory in effect"
+                ]
+                for kw in advisory_keywords:
+                    count = text.count(kw)
+                    if count > 0:
+                        advisory_count += count
+                        advisory_details.append(f"'{kw}' found {count}x")
+
+                # If we found mentions, this page has the info
+                if advisory_count > 0:
+                    source_url = url
+                    break
+                else:
+                    # "boil water" mentioned but in general context, not active advisory
+                    # Check for "no current advisories" language
+                    if any(phrase in text for phrase in
+                           ["no current", "no active", "no boil water advisory",
+                            "no advisories", "water is safe"]):
+                        advisory_count = 0
+                        source_url = url
+                        break
+            elif any(phrase in text for phrase in
+                     ["no current", "no active", "water is safe", "meets all"]):
+                advisory_count = 0
+                source_url = url
+                break
+        except requests.RequestException:
+            continue
+
+    notes = (f"Active advisories: {advisory_count}. Details: {advisory_details}."
+             if advisory_count > 0
+             else "No active boil water advisories detected. "
+                  "Toronto's 4 treatment plants serve ~4M people. "
+                  "An advisory would appear at toronto.ca/tap-water.")
+
+    return [_ok("Boil Water Advisories", advisory_count, "active advisories",
+                "Toronto Water — toronto.ca", source_url,
+                str(date.today()), notes)]
+
+
 def fetch_ontario_er_capacity():
     """
     data.ontario.ca — ER Wait Times.
@@ -1769,14 +1894,16 @@ def get_manual_placeholders():
 SECTOR_SCRAPERS = {
     "energy":      [fetch_ieso_generation_mix, fetch_ieso_ontario_demand,
                     fetch_natural_gas_storage, fetch_brent_crude],
-    "water":       [fetch_active_water_outages, fetch_toronto_shelter],
+    "water":       [fetch_active_water_outages, fetch_toronto_boil_advisories,
+                    fetch_toronto_shelter],
     "health":      [fetch_ontario_er_capacity, fetch_phac_wastewater,
                     fetch_ontario_icu_occupancy],
     "food":        [fetch_statcan_cpi],
     "transport":   [fetch_ttc_ridership],
     "environment": [fetch_toronto_aqhi],
     "financial":   [fetch_bank_of_canada_rate, fetch_cad_usd_rate,
-                    fetch_toronto_fuel_price, fetch_osb_insolvency],
+                    fetch_toronto_fuel_price, fetch_toronto_unemployment,
+                    fetch_osb_insolvency],
 }
 
 
@@ -1794,6 +1921,7 @@ def check_network_connectivity():
         "www.bankofcanada.ca":                     "Bank of Canada",
         "ontario.ca":                              "Ontario fuel prices",
         "services3.arcgis.com":                   "Toronto Water outages (ArcGIS)",
+        "www150.statcan.gc.ca":                    "StatsCan (CPI, unemployment, gas)",
         "open.canada.ca":                          "OSB Insolvency",
     }
     print("\n  NETWORK CONNECTIVITY PRE-CHECK\n  " + "-"*54)
