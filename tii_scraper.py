@@ -1867,6 +1867,14 @@ def fetch_osb_insolvency():
 
 def get_manual_placeholders():
     return [
+        _manual("Toronto Hydro Active Outages",
+                "Toronto Hydro Outage Map (KUBRA StormCenter)",
+                "KUBRA StormCenter API confirmed but data endpoints require auth. "
+                "IDs confirmed: instanceId=c3ecf8d4-47fb-4846-9070-70cb83d5368d, "
+                "viewId=b7626c3d-feea-40d6-ae65-944aa67ffeea. "
+                "Manual: outagemap.torontohydro.com — updated every 10 min. "
+                "Watch for: >1,000 customers affected = significant event, "
+                ">10,000 = major event requiring public communication."),
         _manual("Grid Reserve Margin", "IESO Reliability Outlook (quarterly PDF)",
                 "ieso.ca → Planning and Forecasting → Reliability Outlook → latest PDF. "
                 "Find 'Reserve Above Requirement' figure. Update quarterly."),
@@ -1921,6 +1929,7 @@ def check_network_connectivity():
         "www.bankofcanada.ca":                     "Bank of Canada",
         "ontario.ca":                              "Ontario fuel prices",
         "services3.arcgis.com":                   "Toronto Water outages (ArcGIS)",
+        "outagemap.torontohydro.com":              "Toronto Hydro outage map",
         "www150.statcan.gc.ca":                    "StatsCan (CPI, unemployment, gas)",
         "open.canada.ca":                          "OSB Insolvency",
     }
