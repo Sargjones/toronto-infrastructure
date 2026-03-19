@@ -205,6 +205,42 @@
     color: var(--alert); font-size: 13px;
     margin: 2rem 0; display: none;
   }
+
+  .brief-panel {
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: 10px;
+    padding: 1.5rem;
+    margin-bottom: 1.75rem;
+  }
+  .brief-header {
+    display: flex; align-items: baseline;
+    justify-content: space-between; flex-wrap: wrap;
+    gap: 8px; margin-bottom: 1rem;
+    padding-bottom: .75rem;
+    border-bottom: 0.5px solid var(--border);
+  }
+  .brief-title { font-size: 14px; font-weight: 600; color: var(--text1); }
+  .brief-date  { font-size: 12px; color: var(--text3); }
+  .brief-badge {
+    font-size: 11px; padding: 2px 8px;
+    border-radius: 99px; font-weight: 500;
+    background: var(--warn-bg); color: var(--warn);
+  }
+  .brief-content { font-size: 14px; line-height: 1.7; color: var(--text1); }
+  .brief-content h2 {
+    font-size: 13px; font-weight: 600; color: var(--text2);
+    text-transform: uppercase; letter-spacing: .05em;
+    margin: 1rem 0 .4rem;
+  }
+  .brief-content h2:first-child { margin-top: 0; }
+  .brief-content p  { margin-bottom: .75rem; }
+  .brief-content ul { margin: .25rem 0 .75rem 1.25rem; }
+  .brief-content li { margin-bottom: .25rem; }
+  .brief-content em { color: var(--text2); font-style: normal; font-size: 12px; }
+  .brief-escalated { border-color: var(--alert); }
+  .brief-escalated .brief-badge { background: var(--alert-bg); color: var(--alert); }
+  .brief-loading { font-size: 13px; color: var(--text3); font-style: italic; }
 </style>
 </head>
 <body>
@@ -216,13 +252,14 @@
   </div>
   <div class="topbar-right">
     <span id="status-dot" class="pulse"></span>
-    <button class="refresh-btn" onclick="loadData()">Refresh</button>
+    <button class="refresh-btn" id="refresh-btn" onclick="handleRefresh()">Refresh</button>
   </div>
 </div>
 
 <div class="main">
   <div id="loading">Loading data…</div>
   <div id="error-msg"></div>
+  <div id="brief-panel" style="display:none"></div>
   <div id="dashboard" style="display:none">
     <div class="summary-bar" id="summary-bar"></div>
     <div id="alert-banners"></div>
@@ -241,7 +278,8 @@
 </div>
 
 <script>
-const DATA_URL = "https://raw.githubusercontent.com/Sargjones/toronto-infrastructure/main/tii_data_latest.json";
+const BRIEF_URL = DATA_URL.replace("tii_data_latest.json", "tii_brief_latest.md");
+  const DATA_URL = "https://raw.githubusercontent.com/Sargjones/toronto-infrastructure/main/tii_data_latest.json";
   // Replace YOUR_GITHUB_USERNAME above with your actual GitHub username
 const REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 
@@ -289,6 +327,52 @@ function dotClass(s) {
           manual:"dot-manual",error:"dot-error"}[s] || "dot-manual";
 }
 
+function simpleMarkdown(md) {
+  return md
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^\* (.+)$/gm, '<li>$1</li>')
+    .replace(/(<li>.*<\/li>
+?)+/g, '<ul>$&</ul>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+    .replace(/
+
+/g, '</p><p>')
+    .replace(/^(?!<[hul])(.+)$/gm, '$1')
+    .trim();
+}
+
+async function loadBrief(isAlert) {
+  const panel = document.getElementById("brief-panel");
+  try {
+    const res = await fetch(BRIEF_URL + "?t=" + Date.now());
+    if(!res.ok) throw new Error("not found");
+    const md = await res.text();
+
+    const lines = md.split("\n");
+    const dateMatch = lines.find(l => l.startsWith("*Week of"));
+    const briefDate = dateMatch ? dateMatch.replace(/\*/g, "").trim() : "";
+    const body = lines.slice(2).join("\n");
+
+    const escalated = isAlert ? " brief-escalated" : "";
+    const badge = isAlert
+      ? '<span class="brief-badge">Alert escalation — updated daily</span>'
+      : '<span class="brief-badge" style="background:var(--ok-bg);color:var(--ok)">Weekly brief</span>';
+
+    panel.style.display = "block";
+    panel.innerHTML = `
+      <div class="brief-panel${escalated}">
+        <div class="brief-header">
+          <span class="brief-title">Intelligence brief</span>
+          ${badge}
+          <span class="brief-date">${briefDate}</span>
+        </div>
+        <div class="brief-content"><p>${simpleMarkdown(body)}</p></div>
+      </div>`;
+  } catch(e) {
+    panel.style.display = "none";
+  }
+}
+
 function render(data) {
   const results = data.results || [];
   const t = data.totals || {};
@@ -296,7 +380,8 @@ function render(data) {
 
   document.getElementById("loading").style.display = "none";
   document.getElementById("dashboard").style.display = "block";
-  document.getElementById("topbar-sub").textContent = `${rd}`;
+  const rdDisp = rd ? rd + " UTC" : "unknown";
+  document.getElementById("topbar-sub").textContent = rdDisp;
 
   const dot = document.getElementById("status-dot");
   dot.className = "pulse";
@@ -347,6 +432,7 @@ function render(data) {
     if(!allKeys.includes(k)) allKeys.push(k);
   }
 
+  loadBrief((t.alert||0) > 0);
   const sectorsEl = document.getElementById("sectors");
   sectorsEl.innerHTML = "";
 
@@ -385,7 +471,7 @@ function render(data) {
   document.getElementById("footer-sources").textContent =
     "Sources: IESO · Bank of Canada · StatsCan · Toronto Open Data · Environment Canada · data.ontario.ca · EIA · open.canada.ca";
   document.getElementById("footer-run").textContent =
-    `TII v2.2 · scraper run ${rd} · auto-refresh every 15 min`;
+    `TII v2.2 · scraper run ${rd} UTC · auto-refresh every 15 min`;
 }
 
 function showError(msg) {
@@ -395,9 +481,22 @@ function showError(msg) {
   e.textContent = msg;
 }
 
+function handleRefresh() {
+  const btn = document.getElementById("refresh-btn");
+  btn.textContent = "Refreshing…";
+  btn.disabled = true;
+  loadData().finally(() => {
+    btn.textContent = "Refresh";
+    btn.disabled = false;
+  });
+}
+
 async function loadData() {
   try {
-    const res = await fetch(DATA_URL + "?t=" + Date.now());
+    const res = await fetch(DATA_URL + "?t=" + Date.now(), {
+      cache: "no-store",
+      headers: { "Cache-Control": "no-cache" }
+    });
     if(!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     render(data);
