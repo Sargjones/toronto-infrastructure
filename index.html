@@ -280,7 +280,7 @@
 <script>
 const DATA_URL = "https://raw.githubusercontent.com/Sargjones/toronto-infrastructure/main/tii_data_latest.json";
 const BRIEF_URL = DATA_URL.replace("tii_data_latest.json", "tii_brief_latest.md");
-const REFRESH_INTERVAL_MS = 15 * 60 * 1000;
+const REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 const SECTOR_ORDER = ["energy","water","health","food","transport","environment","financial"];
 const SECTOR_LABELS = {
@@ -327,17 +327,14 @@ function dotClass(s) {
 }
 
 function simpleMarkdown(md) {
-  return md
-    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-    .replace(/^\* (.+)$/gm, '<li>$1</li>')
-    .replace(/(<li>.*<\/li>
-?)+/g, '<ul>$&</ul>')
-    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
-    .replace(/
-
-/g, '</p><p>')
-    .replace(/^(?!<[hul])(.+)$/gm, '$1')
-    .trim();
+  if(!md) return "";
+  // Use string replace where possible to avoid regex/newline issues in sandboxed environments
+  let out = md;
+  out = out.replace(/^## (.+)$/gm, "<h2>$1</h2>");
+  out = out.replace(/^\* (.+)$/gm, "<li>$1</li>");
+  out = out.split("\n\n").join("</p><p>");
+  out = out.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+  return out.trim();
 }
 
 async function loadBrief(isAlert) {
@@ -470,7 +467,7 @@ function render(data) {
   document.getElementById("footer-sources").textContent =
     "Sources: IESO · Bank of Canada · StatsCan · Toronto Open Data · Environment Canada · data.ontario.ca · EIA · open.canada.ca";
   document.getElementById("footer-run").textContent =
-    `TII v2.2 · scraper run ${rd} UTC · auto-refresh every 15 min`;
+    `TII v2.2 · scraper run ${rd} UTC · auto-refresh every 6 hours`;
 }
 
 function showError(msg) {
