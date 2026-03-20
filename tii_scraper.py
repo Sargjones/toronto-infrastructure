@@ -1,5 +1,5 @@
 """
-Toronto Infrastructure Intelligence (TII) — Data Scraper v2.5
+Toronto Infrastructure Intelligence (TII) — Data Scraper v2.7
 ==============================================================
 Fixes vs v1.3:
   1. IESO XML: replaced BeautifulSoup(html.parser) with xml.etree.ElementTree
@@ -107,11 +107,25 @@ THRESHOLDS = [
         lambda v: v > 15,   lambda v: v > 25,
         "Elevated break rate — above seasonal average",
         "Critical break rate — infrastructure stress"),
+    # Housing market
+    ("TRREB Sales-to-New-Listings Ratio",
+        lambda v: v > 60,  lambda v: v > 70,
+        "Seller's market — SNR above 60%, price pressure building",
+        "Strong seller's market — SNR above 70%, significant affordability stress"),
     # Labour market
     ("Toronto Unemployment Rate",
         lambda v: v > 8.0,  lambda v: v > 10.0,
         "Unemployment elevated — above 8% (high vs pre-tariff baseline)",
         "Unemployment at recession level — above 10%"),
+    # Pipeline utilization
+    ("TCPL Parkway Receipts (GTA supply)",
+        lambda v: v > 85,  lambda v: v > 95,
+        "Parkway pipeline near capacity — GTA supply stress risk",
+        "Parkway pipeline at capacity — GTA supply emergency risk"),
+    ("TCPL Northern Ontario Line",
+        lambda v: v > 85,  lambda v: v > 95,
+        "Northern Ontario Line near capacity — upstream supply stress",
+        "Northern Ontario Line at capacity — upstream supply emergency"),
     # Financial
     ("CAD/USD Exchange Rate",
         lambda v: v > 1.40, lambda v: v > 1.50,
@@ -405,67 +419,96 @@ def fetch_ieso_ontario_demand():
 
 def fetch_natural_gas_storage():
     """
-    StatsCan WDS — Ontario natural gas underground storage.
+    US East region natural gas working gas in storage — EIA v2 API.
+    Series: NW2_EPG0_SAT_R1X_BCF (East region total working gas, weekly BCF)
+    East region includes New England, Mid-Atlantic, and South Atlantic states
+    which are the primary supply source for Ontario via interstate pipelines.
 
-    FIX v1.4: original vector v65201762 returned 0.0 (wrong vector or
-    seasonal depletion). Now tries multiple known Ontario storage vectors
-    and returns the first non-zero result with the vector ID noted.
+    Weekly data, released every Thursday for the prior week.
+    Context: East region storage below 1,500 BCF = low heading into winter.
+    Ontario draws heavily on US storage during peak heating demand.
 
-    Ontario underground gas storage (Dawn Hub area, closing inventory):
-    Table 25-10-0057-01: Natural gas storage, Canada and provinces, monthly
-    Vector candidates based on StatsCan coordinate system:
+    Requires EIA_API_KEY environment variable.
+    Free key: eia.gov/opendata/register.php
     """
-    WDS_URL = "https://www150.statcan.gc.ca/t1/wds/rest/getDataFromVectorsAndLatestNPeriods"
-    # Try multiple Ontario gas storage vectors — first non-zero value wins
-    # These cover: closing inventory, total storage, Ontario underground
-    VECTOR_CANDIDATES = [65201762, 65201760, 65201764, 65201766, 65201768,
-                         65201770, 65201772]
+    api_key = os.environ.get("EIA_API_KEY", "DEMO_KEY")
+    URL = "https://api.eia.gov/v2/natural-gas/stor/wkly/data/"
+    params = {
+        "api_key": api_key,
+        "frequency": "weekly",
+        "data[0]": "value",
+        "facets[duoarea][]": "R1X",   # East region
+        "facets[process][]": "SAT",   # Total working gas in storage
+        "sort[0][column]": "period",
+        "sort[0][direction]": "desc",
+        "length": 2
+    }
 
     try:
-        r = SESSION.post(WDS_URL,
-                         json=[{"vectorId": v, "latestN": 2} for v in VECTOR_CANDIDATES],
-                         timeout=30)
+        r = SESSION.get(URL, params=params, timeout=TIMEOUT)
         r.raise_for_status()
         data = r.json()
     except (requests.RequestException, json.JSONDecodeError) as e:
-        return [_err("Natural Gas Storage (BCM)", "StatsCan WDS API", WDS_URL, str(e))]
+        return [_err("Natural Gas Storage (East)", "EIA v2 API", URL, str(e))]
 
-    results_found = []
-    for item in data:
+    rows = data.get("response", {}).get("data", [])
+
+    # If DEMO_KEY or rate limit returns empty, fall back gracefully
+    if not rows:
+        err_msg = (data.get("response", {}).get("error") or
+                   str(data.get("warnings", "No data returned — check EIA_API_KEY")))
+        # Try without facets to see if any data comes back at all
         try:
-            obj = item.get("object", {})
-            status = item.get("status", "FAILED")
-            if status != "SUCCESS":
-                continue
-            vid = obj.get("vectorId")
-            points = obj.get("vectorDataPoint", [])
-            if not points:
-                continue
-            latest = points[-1]
-            val = float(latest.get("value", 0) or 0)
-            ref = latest.get("refPer", "unknown")
-            results_found.append((vid, val, ref))
-        except (KeyError, ValueError, TypeError):
-            continue
+            params_broad = {
+                "api_key": api_key,
+                "frequency": "weekly",
+                "data[0]": "value",
+                "sort[0][column]": "period",
+                "sort[0][direction]": "desc",
+                "length": 5
+            }
+            r2 = SESSION.get(URL, params=params_broad, timeout=TIMEOUT)
+            rows_broad = r2.json().get("response", {}).get("data", [])
+            # Filter for East region and total working gas
+            rows = [row for row in rows_broad
+                    if row.get("duoarea") == "R1X"
+                    and row.get("process") == "SAT"]
+        except Exception:
+            pass
 
-    # Pick first non-zero result, or the first result if all zero
-    non_zero = [(v, val, ref) for v, val, ref in results_found if val > 0]
-    if non_zero:
-        vid, val_m3, ref = non_zero[0]
-    elif results_found:
-        vid, val_m3, ref = results_found[0]
-    else:
-        return [_err("Natural Gas Storage (BCM)", "StatsCan WDS API", WDS_URL,
-                     f"No successful responses. Tried vectors: {VECTOR_CANDIDATES}. "
-                     f"Response preview: {str(data)[:300]}")]
+    if not rows:
+        return [_err("Natural Gas Storage (East)", "EIA v2 API", URL,
+                     f"No data returned. Ensure EIA_API_KEY secret is set. {err_msg}")]
 
-    ontario_bcm = round(val_m3 / 1e9, 3)
-    return [_ok("Natural Gas Storage (BCM)", ontario_bcm, "BCM",
-                "StatsCan WDS API — Table 25-10-0057-01", WDS_URL, ref,
-                f"Vector v{vid}. Raw: {val_m3:.0f} m³. "
-                f"Note: if value is 0.0, vector may be wrong — check StatsCan "
-                f"Table 25-10-0057-01 to find correct Ontario closing inventory vector. "
-                f"Lags ~45 days.")]
+    latest = rows[0]
+    value  = latest.get("value")
+    period = latest.get("period", "unknown")
+    units  = latest.get("units", "BCF")
+    area   = latest.get("area-name", "East region")
+
+    if value is None:
+        return [_err("Natural Gas Storage (East)", "EIA v2 API", URL,
+                     f"Null value for period {period}")]
+
+    bcf = float(value)
+
+    # Prior week for context
+    prior_note = ""
+    if len(rows) >= 2:
+        prior = rows[1].get("value")
+        if prior:
+            chg = round(bcf - float(prior), 1)
+            direction = "injection" if chg > 0 else "withdrawal"
+            prior_note = f" Week-over-week: {chg:+.1f} BCF ({direction})."
+
+    notes = (f"EIA {area} total working gas in underground storage. "
+             f"{prior_note} "
+             f"Context: East region <1,500 BCF = low heading into winter; "
+             f"Ontario supply relies heavily on US East pipeline network. "
+             f"Released weekly on Thursdays.")
+
+    return [_ok("Natural Gas Storage (East)", round(bcf, 1), units,
+                f"EIA v2 — {area}", URL, period, notes)]
 
 
 def fetch_brent_crude():
@@ -1211,6 +1254,243 @@ def fetch_toronto_boil_advisories():
                 str(date.today()), notes)]
 
 
+def fetch_trreb_market():
+    """
+    TRREB GTA housing market — sales-to-new-listings ratio and average price.
+    Source: trreb.ca/market-data/quick-market-overview/
+    Data embedded as JavaScript variables in page HTML, updated monthly.
+    Published first week of each month for the prior month.
+
+    Key indicators:
+    - Sales-to-new-listings ratio (SNR):
+        <40% = buyer's market
+        40-60% = balanced market
+        >60% = seller's market
+    - Average selling price (all residential)
+    - Total sales (year-over-year)
+    - Total new listings (year-over-year)
+    """
+    URL = "https://trreb.ca/market-data/quick-market-overview/"
+    try:
+        r = SESSION.get(URL, timeout=TIMEOUT,
+                        headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.6"})
+        r.raise_for_status()
+    except requests.RequestException as e:
+        return [_err("TRREB Sales-to-New-Listings Ratio", "TRREB Quick Overview", URL, str(e))]
+
+    try:
+        from bs4 import BeautifulSoup as _BS
+        import re as _re
+        soup = _BS(r.content, "html.parser")
+
+        # All data is in inline script blocks as JS variables
+        scripts = " ".join(s.string or "" for s in soup.find_all("script", src=False))
+
+        def extract_js_obj(scripts, var_name):
+            """Extract last value from a JS object literal like: let Var = {"Feb'25": 32, "Feb'26": 36}"""
+            pattern = rf'let\s+{var_name}\s*=\s*\{{([^}}]+)\}}'
+            m = _re.search(pattern, scripts)
+            if not m:
+                return None, None, None
+            pairs = _re.findall(r'"([^"]+)":\s*([\d.]+)', m.group(1))
+            if not pairs:
+                return None, None, None
+            # Return latest period and value, plus prior period value
+            latest_period, latest_val = pairs[-1]
+            prior_val = pairs[-2][1] if len(pairs) >= 2 else None
+            return latest_period, float(latest_val), float(prior_val) if prior_val else None
+
+        # Sales-to-new-listings ratio
+        snr_period, snr_val, snr_prior = extract_js_obj(scripts, "TnlSnrData")
+        # Average selling price
+        asp_period, asp_val, asp_prior = extract_js_obj(scripts, "AspYoyData")
+        # Total residential transactions
+        trt_period, trt_val, trt_prior = extract_js_obj(scripts, "TrtYoyData")
+        # Total new listings
+        tnl_period, tnl_val, tnl_prior = extract_js_obj(scripts, "TnlYoyData")
+
+        if snr_val is None:
+            raise ValueError("Could not parse TnlSnrData from page — page structure may have changed")
+
+        # Market classification
+        if snr_val < 40:
+            market_type = "buyer's market"
+        elif snr_val <= 60:
+            market_type = "balanced market"
+        else:
+            market_type = "seller's market"
+
+        # Price change YoY
+        price_note = ""
+        if asp_val and asp_prior:
+            price_chg = round(((asp_val - asp_prior) / asp_prior) * 100, 1)
+            price_note = f" Avg price ${asp_val:,.0f} ({price_chg:+.1f}% YoY)."
+
+        # Sales change YoY
+        sales_note = ""
+        if trt_val and trt_prior:
+            sales_chg = round(((trt_val - trt_prior) / trt_prior) * 100, 1)
+            sales_note = f" Sales {int(trt_val):,} ({sales_chg:+.1f}% YoY)."
+
+        # Listings change YoY
+        listings_note = ""
+        if tnl_val and tnl_prior:
+            listings_chg = round(((tnl_val - tnl_prior) / tnl_prior) * 100, 1)
+            listings_note = f" New listings {int(tnl_val):,} ({listings_chg:+.1f}% YoY)."
+
+        notes = (f"{market_type.title()} — SNR of {snr_val:.0f}% "
+                 f"(prior period: {snr_prior:.0f}%).{price_note}{sales_note}{listings_note} "
+                 f"Reference: {snr_period}. "
+                 f"SNR guide: <40% buyer's, 40-60% balanced, >60% seller's market.")
+
+        results = [
+            _ok("TRREB Sales-to-New-Listings Ratio", snr_val, "%",
+                "TRREB Quick Market Overview", URL, snr_period, notes),
+        ]
+        if asp_val:
+            results.append(
+                _ok("TRREB Average Selling Price", round(asp_val), "CAD",
+                    "TRREB Quick Market Overview", URL, asp_period,
+                    f"GTA all residential. {price_note.strip()}"))
+        return results
+
+    except Exception as e:
+        return [_err("TRREB Sales-to-New-Listings Ratio", "TRREB Quick Overview",
+                     URL, f"Parse error: {e}")]
+
+
+def fetch_tcpl_mainline():
+    """
+    TransCanada (TC) Canadian Mainline — Parkway Receipts utilization.
+    Source: Canada Energy Regulator (CER) open data CSV.
+    Updated monthly, daily granularity.
+
+    Parkway Receipts is the key point measuring gas arriving at the
+    Parkway hub near Toronto — the primary delivery point for GTA supply.
+    Northern Ontario Line is included as secondary context (gas transiting
+    across northern Ontario toward Toronto).
+
+    Utilization = throughput / capacity * 100
+    Normal operating range: 50-80%
+    Warn: >85% sustained (pipeline near capacity, supply stress risk)
+    Alert: >95% sustained (pipeline at capacity, supply emergency risk)
+
+    CSV has ~208,000 rows (2006-present). We read only the last 5,000
+    rows to get recent data efficiently without downloading the full file.
+    """
+    URL = ("https://www.cer-rec.gc.ca/open/energy/throughput-capacity/"
+           "tcpl-mainline-throughput-and-capacity.csv")
+
+    try:
+        r = SESSION.get(URL, timeout=30,
+                        headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.7"})
+        r.raise_for_status()
+    except requests.RequestException as e:
+        return [_err("TCPL Mainline Parkway Utilization",
+                     "CER Open Data CSV", URL, str(e))]
+
+    try:
+        import io as _io
+        import csv as _csv
+
+        lines = r.text.splitlines()
+        if len(lines) < 2:
+            raise ValueError("CSV appears empty")
+
+        header = lines[0]
+        # Read last 5000 rows for efficiency — covers ~14 months of daily data
+        recent_text = "\n".join([header] + lines[-5000:])
+        reader = _csv.DictReader(_io.StringIO(recent_text))
+
+        # Collect latest rows per key point
+        latest = {}
+        weekly = {}  # store last 7 days per key point
+
+        for row in reader:
+            kp = row.get("Key Point", "").strip().replace("\n", "").replace("\r", "")
+            dt = row.get("Date", "")
+            if not kp or not dt:
+                continue
+            if kp not in latest or dt > latest[kp]["Date"]:
+                latest[kp] = row
+            if kp not in weekly:
+                weekly[kp] = []
+            weekly[kp].append(row)
+
+        # Key points we care about
+        targets = {
+            "Eastern Triangle - Parkway Receipts": "Parkway Receipts (GTA supply)",
+            "Northern Ontario Line":               "Northern Ontario Line",
+        }
+
+        results = []
+        for kp, label in targets.items():
+            # Clean key — CSV has embedded newlines in key point names
+            matched_key = None
+            for k in latest:
+                if kp.lower() in k.lower():
+                    matched_key = k
+                    break
+
+            if not matched_key:
+                results.append(_err(f"TCPL {label}", "CER Open Data", URL,
+                                    f"Key point '{kp}' not found in CSV"))
+                continue
+
+            row = latest[matched_key]
+            ref_date = row.get("Date", "unknown")
+
+            try:
+                cap = float(row.get("Capacity (1000 m3/d)", 0) or 0)
+                thr = float(row.get("Throughput (1000 m3/d)", 0) or 0)
+            except (ValueError, TypeError):
+                results.append(_err(f"TCPL {label}", "CER Open Data", URL,
+                                    "Could not parse capacity/throughput values"))
+                continue
+
+            if cap <= 0:
+                results.append(_err(f"TCPL {label}", "CER Open Data", URL,
+                                    f"Capacity is zero for {matched_key}"))
+                continue
+
+            util = round(thr / cap * 100, 1)
+
+            # 7-day average utilization
+            recent_rows = sorted(weekly.get(matched_key, []),
+                                 key=lambda x: x.get("Date", ""))[-7:]
+            if len(recent_rows) >= 3:
+                utils = []
+                for rr in recent_rows:
+                    try:
+                        rc = float(rr.get("Capacity (1000 m3/d)", 0) or 0)
+                        rt = float(rr.get("Throughput (1000 m3/d)", 0) or 0)
+                        if rc > 0:
+                            utils.append(rt / rc * 100)
+                    except (ValueError, TypeError):
+                        pass
+                avg_util = round(sum(utils) / len(utils), 1) if utils else util
+                avg_note = f" 7-day avg: {avg_util}%."
+            else:
+                avg_util = util
+                avg_note = ""
+
+            notes = (f"Throughput: {thr:,.0f} / Capacity: {cap:,.0f} (1000 m³/day). "
+                     f"Utilization: {util}%.{avg_note} "
+                     f"Normal range 50-80%. Above 85% = pipeline near capacity. "
+                     f"Source: CER open data, updated monthly.")
+
+            results.append(_ok(f"TCPL {label}", util, "% utilized",
+                               "CER — TransCanada Mainline", URL,
+                               ref_date, notes))
+
+        return results if results else [_err("TCPL Mainline", "CER Open Data",
+                                            URL, "No matching key points found")]
+
+    except Exception as e:
+        return [_err("TCPL Mainline Parkway Utilization",
+                     "CER Open Data CSV", URL, f"Parse error: {e}")]
+
+
 def fetch_ontario_er_capacity():
     """
     data.ontario.ca — ER Wait Times.
@@ -1901,7 +2181,8 @@ def get_manual_placeholders():
 
 SECTOR_SCRAPERS = {
     "energy":      [fetch_ieso_generation_mix, fetch_ieso_ontario_demand,
-                    fetch_natural_gas_storage, fetch_brent_crude],
+                    fetch_natural_gas_storage, fetch_tcpl_mainline,
+                    fetch_brent_crude],
     "water":       [fetch_active_water_outages, fetch_toronto_boil_advisories,
                     fetch_toronto_shelter],
     "health":      [fetch_ontario_er_capacity, fetch_phac_wastewater,
@@ -1911,7 +2192,7 @@ SECTOR_SCRAPERS = {
     "environment": [fetch_toronto_aqhi],
     "financial":   [fetch_bank_of_canada_rate, fetch_cad_usd_rate,
                     fetch_toronto_fuel_price, fetch_toronto_unemployment,
-                    fetch_osb_insolvency],
+                    fetch_trreb_market, fetch_osb_insolvency],
 }
 
 
@@ -1930,6 +2211,8 @@ def check_network_connectivity():
         "ontario.ca":                              "Ontario fuel prices",
         "services3.arcgis.com":                   "Toronto Water outages (ArcGIS)",
         "outagemap.torontohydro.com":              "Toronto Hydro outage map",
+        "trreb.ca":                                "TRREB housing market",
+        "www.cer-rec.gc.ca":                        "CER TransCanada Mainline data",
         "www150.statcan.gc.ca":                    "StatsCan (CPI, unemployment, gas)",
         "open.canada.ca":                          "OSB Insolvency",
     }
