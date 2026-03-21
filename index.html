@@ -295,7 +295,7 @@ function inferSector(name) {
   if(/water|shelter|watermain|wwtp/.test(n)) return "water";
   if(/icu|er capacity|wastewater|blood/.test(n)) return "health";
   if(/cpi|grocery|food bank|inflation/.test(n)) return "food";
-  if(/ttc|ridership|port|dwell/.test(n)) return "transport";
+  if(/ttc|ridership|port|dwell|pearson|notam|airport|cyyz/.test(n)) return "transport";
   if(/aqhi|air quality|smog/.test(n)) return "environment";
   if(/bank|rate|cad|usd|fuel|price|bankruptcy|insolvency|eviction/.test(n)) return "financial";
   return "other";
