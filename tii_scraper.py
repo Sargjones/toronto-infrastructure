@@ -1481,8 +1481,10 @@ def fetch_tcpl_mainline():
 
             notes = (f"Throughput: {thr:,.0f} / Capacity: {cap:,.0f} (1000 m³/day). "
                      f"Utilization: {util}%.{avg_note} "
-                     f"Normal range 50-80%. Above 85% = pipeline near capacity. "
-                     f"Source: CER open data, updated monthly.")
+                     f"Normal operating range 50-80%. Above 85% = supply stress risk. "
+                     f"DATA LAG: CER reports quarterly — current data is {ref_date}. "
+                     f"Use for baseline context only, not real-time stress monitoring. "
+                     f"Source: CER open data pipeline profiles.")
 
             results.append(_ok(f"TCPL {label}", util, "% utilized",
                                "CER — TransCanada Mainline", URL,
