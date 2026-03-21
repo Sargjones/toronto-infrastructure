@@ -1,5 +1,5 @@
 """
-Toronto Infrastructure Intelligence (TII) — Data Scraper v2.7
+Toronto Infrastructure Intelligence (TII) — Data Scraper v2.8
 ==============================================================
 Fixes vs v1.3:
   1. IESO XML: replaced BeautifulSoup(html.parser) with xml.etree.ElementTree
@@ -117,6 +117,11 @@ THRESHOLDS = [
         lambda v: v > 8.0,  lambda v: v > 10.0,
         "Unemployment elevated — above 8% (high vs pre-tariff baseline)",
         "Unemployment at recession level — above 10%"),
+    # Airport operations
+    ("Pearson Airport Operations",
+        lambda v: v >= 1,  lambda v: v >= 2,
+        "Reduced capacity or approach restriction at Pearson",
+        "Runway closure or ATC flow control active at Pearson"),
     # Pipeline utilization
     ("TCPL Parkway Receipts (GTA supply)",
         lambda v: v > 85,  lambda v: v > 95,
@@ -1491,6 +1496,184 @@ def fetch_tcpl_mainline():
                      "CER Open Data CSV", URL, f"Parse error: {e}")]
 
 
+def fetch_pearson_notams():
+    """
+    Toronto Pearson (CYYZ) operational status derived from NAV Canada NOTAMs.
+    Source: NAV Canada CFPS API — plan.navcanada.ca
+    Updated in near-real-time as NOTAMs are issued and cancelled.
+
+    Classification uses ICAO Q-codes from the NOTAM Q-line:
+    - Security/geopolitical (QXXXX security, QRXXXX, QOECH airspace):  severity 3
+    - ATC flow control (QATFM, QATXX, flow/GDP/EDCT in text):          severity 3
+    - Multiple runway closures (QMRLC x2+):                            severity 2
+    - Single runway closure (QMRLC):                                    severity 2
+    - Approach/procedure suspended (QPIXX, QPDXX):                     severity 1
+    - Taxiway closures / equipment U/S (QMXLC, QNVXX, QSAXX):        severity 0
+    - RSC / bird / obstacle / construction:                             severity 0
+
+    Dashboard value: 0=Normal, 1=Reduced capacity, 2=Runway closure, 3=Flow control/Security
+    Dashboard label: plain-English operational status
+    """
+    URL = "https://plan.navcanada.ca/weather/api/alpha/?site=CYYZ&alpha=notam"
+
+    try:
+        r = SESSION.get(URL, timeout=TIMEOUT,
+                        headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.8"})
+        r.raise_for_status()
+        data = r.json()
+    except (requests.RequestException, json.JSONDecodeError) as e:
+        return [_err("Pearson Airport Operations", "NAV Canada CFPS", URL, str(e))]
+
+    notams = data.get("data", [])
+    total = len(notams)
+
+    # Parse each NOTAM
+    parsed = []
+    for n in notams:
+        try:
+            text_obj = json.loads(n.get("text", "{}"))
+            raw = text_obj.get("raw", "")
+        except (json.JSONDecodeError, TypeError):
+            raw = str(n.get("text", ""))
+
+        # Extract Q-code (subject code, 5th segment of Q line)
+        q_code = ""
+        e_text = ""
+        for line in raw.splitlines():
+            line = line.strip()
+            if line.startswith("Q)"):
+                parts = line.split("/")
+                if len(parts) >= 2:
+                    q_code = parts[1].strip()
+            if line.startswith("E)"):
+                e_text = line[2:].strip()
+
+        parsed.append({
+            "pk":       n.get("pk", ""),
+            "start":    n.get("startValidity", "")[:16],
+            "end":      n.get("endValidity", "")[:16],
+            "q_code":   q_code,
+            "e_text":   e_text,
+            "raw":      raw,
+        })
+
+    # ── Classification ────────────────────────────────────────────────────
+    severity     = 0
+    status_label = "Normal operations"
+    active_flags = []
+
+    # Count runway closures
+    rwy_closures = [p for p in parsed if p["q_code"] in ("QMRLC", "QMRXX")
+                    and "CLSD" in p["e_text"].upper()]
+
+    # Check for ATC flow control / ground delay program
+    flow_keywords = ["FLOW", "GDP", "EDCT", "GROUND DELAY", "GROUND STOP",
+                     "TMI", "TRAFFIC MANAGEMENT", "MIT ", "MINIT"]
+    flow_notams = [p for p in parsed
+                   if any(kw in p["e_text"].upper() or kw in p["raw"].upper()
+                          for kw in flow_keywords)]
+
+    # Check for security / geopolitical / airspace restriction
+    # Distinguish acute security events from standing geopolitical notices:
+    # Standing notices (CZXX FIR-wide, radius 999, long duration >30 days)
+    # are flagged at severity 1 (noted), not severity 3 (alert)
+    acute_security_keywords = ["TFR", "GROUND STOP", "SHOOT DOWN",
+                                "AIR DEFENCE", "HOSTILE FIRE"]
+    standing_geo_keywords   = ["RUSSIAN FED", "BELARUS", "IRAN", "NORTH KOREA",
+                                "UKRAINE", "REGARDLESS OF THE STATE OF REGISTRY"]
+
+    security_notams = []   # acute — severity 3
+    geo_notams      = []   # standing geopolitical — severity 1
+
+    for p in parsed:
+        raw_upper = p["raw"].upper()
+        e_upper   = p["e_text"].upper()
+        is_fir_wide = ("CZXX" in p["raw"] or "999" in p["raw"][:50])
+
+        if any(kw in e_upper or kw in raw_upper for kw in acute_security_keywords):
+            security_notams.append(p)
+        elif p["q_code"] in ("QOECH", "QRTCA", "QRPCA"):
+            if is_fir_wide:
+                geo_notams.append(p)   # standing FIR-wide notice
+            else:
+                security_notams.append(p)  # localised restriction = acute
+        elif any(kw in e_upper or kw in raw_upper for kw in standing_geo_keywords):
+            geo_notams.append(p)
+
+    # Check for significant approach/procedure suspensions
+    approach_suspended = [p for p in parsed
+                          if p["q_code"].startswith("QPI") and
+                          any(kw in p["e_text"].upper()
+                              for kw in ["U/S", "UNSERVICEABLE", "NOT AVBL",
+                                         "SUSPENDED", "CLSD"])]
+
+    # VOR/ILS/ATIS unserviceable
+    navaid_us = [p for p in parsed
+                 if p["q_code"] in ("QNVAS", "QILAS", "QSAAS", "QICAS")
+                 or (p["q_code"].startswith("QNV") and "U/S" in p["e_text"].upper())]
+
+    # ── Determine overall severity ────────────────────────────────────────
+    if security_notams:
+        severity = 3
+        descs = [p["e_text"][:60] for p in security_notams[:2]]
+        status_label = f"Security/airspace restriction — {'; '.join(descs)}"
+        active_flags.append(f"Security NOTAMs: {len(security_notams)}")
+
+    elif flow_notams:
+        severity = 3
+        descs = [p["e_text"][:60] for p in flow_notams[:2]]
+        status_label = f"ATC flow control active — {'; '.join(descs)}"
+        active_flags.append(f"Flow control NOTAMs: {len(flow_notams)}")
+
+    elif len(rwy_closures) >= 2:
+        severity = 2
+        rwys = [p["e_text"][:40] for p in rwy_closures[:3]]
+        status_label = f"Multiple runway closures — {'; '.join(rwys)}"
+        active_flags.append(f"Runway closures: {len(rwy_closures)}")
+
+    elif len(rwy_closures) == 1:
+        severity = 2
+        status_label = f"Runway closure — {rwy_closures[0]['e_text'][:60]}"
+        active_flags.append("Runway closure: 1")
+
+    elif approach_suspended:
+        severity = 1
+        status_label = f"Approach procedure affected — {approach_suspended[0]['e_text'][:60]}"
+        active_flags.append(f"Approach NOTAMs: {len(approach_suspended)}")
+
+    elif geo_notams:
+        # Standing geopolitical notice — notable but not acute
+        if severity == 0:
+            severity = 1
+        descs = [p["e_text"][:50] for p in geo_notams[:1]]
+        active_flags.append(f"Geopolitical airspace notice: {descs[0]}")
+
+    if severity == 0:
+        status_label = "Normal operations"
+
+    # Build notes with full context
+    if geo_notams and not active_flags:
+        active_flags.append(f"Standing geopolitical notice ({len(geo_notams)})")
+    flag_summary = ", ".join(active_flags) if active_flags else "no significant restrictions"
+    notam_breakdown = (
+        f"Runway closures: {len(rwy_closures)}, "
+        f"Flow control: {len(flow_notams)}, "
+        f"Acute security: {len(security_notams)}, "
+        f"Geopolitical notice: {len(geo_notams)}, "
+        f"Approach affected: {len(approach_suspended)}, "
+        f"Navaid U/S: {len(navaid_us)}, "
+        f"Total active NOTAMs: {total}."
+    )
+    notes = (f"{status_label}. {notam_breakdown} "
+             f"Source: NAV Canada CFPS — real-time NOTAM feed. "
+             f"Severity scale: 0=Normal, 1=Reduced capacity, "
+             f"2=Runway closure, 3=Flow control or security.")
+
+    return [_ok("Pearson Airport Operations", severity, "",
+                "NAV Canada CFPS (CYYZ NOTAMs)", URL,
+                str(date.today()), notes)]
+
+
 def fetch_ontario_er_capacity():
     """
     data.ontario.ca — ER Wait Times.
@@ -2188,7 +2371,8 @@ SECTOR_SCRAPERS = {
     "health":      [fetch_ontario_er_capacity, fetch_phac_wastewater,
                     fetch_ontario_icu_occupancy],
     "food":        [fetch_statcan_cpi],
-    "transport":   [fetch_ttc_ridership],
+    "transport":   [fetch_pearson_notams,
+                    fetch_ttc_ridership],
     "environment": [fetch_toronto_aqhi],
     "financial":   [fetch_bank_of_canada_rate, fetch_cad_usd_rate,
                     fetch_toronto_fuel_price, fetch_toronto_unemployment,
@@ -2213,6 +2397,7 @@ def check_network_connectivity():
         "outagemap.torontohydro.com":              "Toronto Hydro outage map",
         "trreb.ca":                                "TRREB housing market",
         "www.cer-rec.gc.ca":                        "CER TransCanada Mainline data",
+        "plan.navcanada.ca":                        "NAV Canada NOTAM feed",
         "www150.statcan.gc.ca":                    "StatsCan (CPI, unemployment, gas)",
         "open.canada.ca":                          "OSB Insolvency",
     }
