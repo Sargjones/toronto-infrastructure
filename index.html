@@ -291,7 +291,7 @@ const SECTOR_LABELS = {
 
 function inferSector(name) {
   const n = (name||"").toLowerCase();
-  if(/nuclear|hydro|gas output|wind|solar|biofuel|ontario demand|peak demand|generation|brent|storage|grid|reserve/.test(n)) return "energy";
+  if(/nuclear|hydro|gas output|wind|solar|biofuel|ontario demand|peak demand|generation|brent|storage|grid|reserve|tcpl|pipeline|parkway|mainline/.test(n)) return "energy";
   if(/water|shelter|watermain|wwtp/.test(n)) return "water";
   if(/icu|er capacity|wastewater|blood/.test(n)) return "health";
   if(/cpi|grocery|food bank|inflation/.test(n)) return "food";
