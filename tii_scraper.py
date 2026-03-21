@@ -1190,73 +1190,116 @@ def fetch_toronto_unemployment():
 def fetch_toronto_boil_advisories():
     """
     Toronto Water — active boil water advisories.
-    Scrapes toronto.ca drinking water quality page.
-    Toronto's water system is large and well-maintained — advisories are rare.
+    Source: toronto.ca/tap-water — Toronto Water public page.
+    Toronto's 4 treatment plants serve ~4M people. Advisories are rare.
     A non-zero count is a significant public health signal.
-    Alert threshold: any active advisory = alert (zero is normal).
+
+    Logic:
+    - Page loads + "water is safe" or similar → 0 advisories (confirmed clean)
+    - Page loads + "boil water advisory" language → count advisories
+    - Page fails to load → error
+    - Page loads but no recognisable content → 0 with note
     """
-    # Primary: Toronto Water drinking water advisories page
-    urls_to_try = [
-        "https://www.toronto.ca/services-payments/water-environment/tap-water-in-toronto/",
-        "https://www.toronto.ca/services-payments/water-environment/tap-water-in-toronto/drinking-water-compliance-and-testing/",
-    ]
+    URL = "https://www.toronto.ca/services-payments/water-environment/tap-water-in-toronto/"
+
+    try:
+        r = SESSION.get(URL, timeout=TIMEOUT,
+                        headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.8"})
+        r.raise_for_status()
+    except requests.RequestException as e:
+        return [_err("Boil Water Advisories", "Toronto Water — toronto.ca",
+                     URL, str(e))]
+
+    from bs4 import BeautifulSoup as _BS
+    soup = _BS(r.content, "html.parser")
+    text = soup.get_text(" ", strip=True).lower()
+
+    if len(text) < 500:
+        return [_err("Boil Water Advisories", "Toronto Water — toronto.ca",
+                     URL, f"Page returned unexpectedly short content ({len(text)} chars)")]
 
     advisory_count = 0
     advisory_details = []
-    source_url = urls_to_try[0]
 
-    for url in urls_to_try:
-        try:
-            r = SESSION.get(url, timeout=TIMEOUT,
-                            headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.5"})
-            r.raise_for_status()
-            from bs4 import BeautifulSoup as _BS
-            soup = _BS(r.content, "html.parser")
-            text = soup.get_text(" ", strip=True).lower()
+    # Check for active advisory language first
+    active_keywords = [
+        "boil water advisory", "boil-water advisory",
+        "do not use", "water advisory in effect",
+        "advisory is in effect", "boil your water"
+    ]
+    for kw in active_keywords:
+        count = text.count(kw)
+        if count > 0:
+            advisory_count += 1
+            advisory_details.append(f"'{kw}' detected")
 
-            # Look for advisory language
-            if "boil water" in text or "boil-water" in text:
-                # Count specific advisory mentions
-                advisory_keywords = [
-                    "boil water advisory", "boil-water advisory",
-                    "do not use", "water advisory in effect"
-                ]
-                for kw in advisory_keywords:
-                    count = text.count(kw)
-                    if count > 0:
-                        advisory_count += count
-                        advisory_details.append(f"'{kw}' found {count}x")
+    # Confirmed clean signals
+    clean_signals = [
+        "water is safe", "safe to drink", "no current advisory",
+        "no active advisory", "no boil water", "meets all",
+        "continues to meet", "tap water is safe"
+    ]
+    page_confirmed_clean = any(phrase in text for phrase in clean_signals)
 
-                # If we found mentions, this page has the info
-                if advisory_count > 0:
-                    source_url = url
-                    break
-                else:
-                    # "boil water" mentioned but in general context, not active advisory
-                    # Check for "no current advisories" language
-                    if any(phrase in text for phrase in
-                           ["no current", "no active", "no boil water advisory",
-                            "no advisories", "water is safe"]):
-                        advisory_count = 0
-                        source_url = url
-                        break
-            elif any(phrase in text for phrase in
-                     ["no current", "no active", "water is safe", "meets all"]):
-                advisory_count = 0
-                source_url = url
-                break
-        except requests.RequestException:
-            continue
-
-    notes = (f"Active advisories: {advisory_count}. Details: {advisory_details}."
-             if advisory_count > 0
-             else "No active boil water advisories detected. "
-                  "Toronto's 4 treatment plants serve ~4M people. "
-                  "An advisory would appear at toronto.ca/tap-water.")
+    if advisory_count > 0:
+        notes = (f"{advisory_count} potential advisory signal(s) detected. "
+                 f"Details: {'; '.join(advisory_details)}. "
+                 f"Verify at toronto.ca/tap-water.")
+    elif page_confirmed_clean:
+        notes = ("No active boil water advisories. "
+                 "Toronto Water confirmed: water is safe to drink. "
+                 "Toronto's 4 treatment plants serve ~4M people across the city.")
+    else:
+        notes = ("No advisory language detected on Toronto Water page. "
+                 "Page loaded successfully but no explicit safety confirmation found. "
+                 "Verify at toronto.ca/tap-water if concerned.")
 
     return [_ok("Boil Water Advisories", advisory_count, "active advisories",
-                "Toronto Water — toronto.ca", source_url,
+                "Toronto Water — toronto.ca", URL,
                 str(date.today()), notes)]
+
+
+def fetch_toronto_unemployment():
+    """
+    Toronto CMA unemployment rate — StatsCan WDS API.
+    Table 14-10-0294-01: Labour force characteristics by CMA, 3-month moving average.
+    Coordinate 23.5.1.1 = Toronto CMA, Unemployment rate, Estimate, Seasonally adjusted.
+    Released monthly, lags ~5 weeks after reference month.
+    Context: Toronto CMA at 8.9% in Sep 2025 — elevated vs pre-tariff levels.
+    Alert threshold: >10% = recession-level stress.
+    """
+    WDS_URL = "https://www150.statcan.gc.ca/t1/wds/rest/getDataFromCubePidCoordAndLatestNPeriods"
+    # productId=14100294, coordinate=23.5.1.1 (Toronto, Unemployment rate, Estimate, SA)
+    payload = [{"productId": 14100294, "coordinate": "23.5.1.1", "latestN": 2}]
+
+    try:
+        r = SESSION.post(WDS_URL, json=payload, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+    except (requests.RequestException, json.JSONDecodeError) as e:
+        return [_err("Toronto Unemployment Rate", "StatsCan WDS (Table 14-10-0294-01)",
+                     WDS_URL, str(e))]
+
+    try:
+        obj = data[0].get("object", {})
+        if data[0].get("status") != "SUCCESS":
+            raise ValueError(f"API status: {data[0].get('status')} — {obj}")
+        points = obj.get("vectorDataPoint", [])
+        if not points:
+            raise ValueError("No data points returned")
+        latest = points[-1]
+        rate = float(latest["value"])
+        ref = latest.get("refPer", "unknown")
+        vector_id = obj.get("vectorId", "?")
+    except (KeyError, ValueError, TypeError, IndexError) as e:
+        return [_err("Toronto Unemployment Rate", "StatsCan WDS (Table 14-10-0294-01)",
+                     WDS_URL, f"Parse error: {e}. Response: {str(data)[:200]}")]
+
+    return [_ok("Toronto Unemployment Rate", round(rate, 1), "%",
+                "StatsCan LFS — Table 14-10-0294-01 (Toronto CMA)", WDS_URL, ref,
+                f"3-month moving average, seasonally adjusted. "
+                f"Vector v{vector_id}. Released ~5 weeks after reference month. "
+                f"Sep 2025: 8.9%. Pre-tariff baseline (2023): ~6.5%.")]
 
 
 def fetch_trreb_market():
