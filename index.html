@@ -298,6 +298,8 @@ function inferSector(name) {
   if(/ttc|ridership|port|dwell|pearson|notam|airport|cyyz/.test(n)) return "transport";
   if(/aqhi|air quality|smog/.test(n)) return "environment";
   if(/bank|rate|cad|usd|fuel|price|bankruptcy|insolvency|eviction/.test(n)) return "financial";
+  if (/tps|sworn|fill rate|community safety|specialized operations|police staffing/i.test(name))
+  return "public_safety";
   return "other";
 }
 
