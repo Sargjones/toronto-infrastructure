@@ -31,7 +31,7 @@ import json
 import re
 import sys
 import xml.etree.ElementTree as ET
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime, date, timedelta
 from pathlib import Path
 
@@ -2404,6 +2404,156 @@ def get_manual_placeholders():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# PUBLIC SAFETY & COST
+# ══════════════════════════════════════════════════════════════════════════════
+
+def fetch_tps_personnel():
+    """TPS Personnel by Rank — annual, most recent complete year.
+    Source: Toronto Police ASR via Toronto Open Data CKAN
+    Returns: sworn count, civilian count, YoY sworn change
+    """
+    url = ("https://ckan0.cf.opendata.inter.prod-toronto.ca/dataset/"
+           "7a49eead-1152-4218-999b-cb8143f443fb/resource/"
+           "d6f5f6fc-bffb-4008-b52b-68e79cf0cd08/download/personnel-by-rank.csv")
+    try:
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        r.raise_for_status()
+        rows = list(csv.DictReader(io.StringIO(r.text)))
+
+        by_year = defaultdict(lambda: defaultdict(int))
+        for row in rows:
+            try:
+                count = int(row["COUNT_"].replace(",", ""))
+                by_year[row["YEAR"]][row["RANK"]] += count
+            except Exception:
+                pass
+
+        years = sorted(by_year.keys())
+        latest = years[-1]
+        prev   = years[-2] if len(years) >= 2 else None
+
+        u     = by_year[latest]["Uniform"]
+        c     = by_year[latest]["Civilian"]
+        o     = by_year[latest].get("Other Staff", 0)
+        total = u + c + o
+        sworn_pct = round(u / total * 100, 1) if total > 0 else None
+        yoy   = u - by_year[prev]["Uniform"] if prev else None
+        yoy_str = f"YoY: {'+' if yoy >= 0 else ''}{yoy} vs {prev}" if yoy is not None else None
+
+        result = {
+            "indicator": "TPS Sworn Officers",
+            "value": u,
+            "unit": "officers",
+            "year": latest,
+            "context": yoy_str,
+            "source": "Toronto Police ASR — Toronto Open Data",
+            "notes": f"Total strength {total:,} ({sworn_pct}% sworn). Data lag: ~1 year.",
+            "sector": "public_safety",
+            "status": "ok",
+        }
+        return [result]
+    except Exception as e:
+        return [_err("TPS Sworn Officers", "public_safety", "officers", str(e))]
+
+
+def fetch_tps_staffing_by_command():
+    """TPS Staffing by Command — fill rate and command distribution.
+    Source: Toronto Police via Toronto Open Data CKAN
+    Most recent year with both Approved + Actual staffing = 2023.
+    Returns: fill rate %, raw gap, CSC%, SOC%
+    """
+    url = ("https://ckan0.cf.opendata.inter.prod-toronto.ca/dataset/"
+           "a6c63920-58d5-4183-912b-5b9c490b681b/resource/"
+           "ec24e8cb-e727-459d-a2f1-f2e7d2206e2a/download/tps-staffing-by-command.csv")
+    try:
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        r.raise_for_status()
+        rows = list(csv.DictReader(io.StringIO(r.text)))
+
+        # Find most recent year with BOTH Approved and Actual data
+        year_metrics = defaultdict(set)
+        for row in rows:
+            if row["Organizational_Entity"] == "1 - Toronto Police Service":
+                year_metrics[row["Year"]].add(row["Type_of_Metric"])
+
+        complete_years = sorted([
+            y for y, metrics in year_metrics.items()
+            if "Approved Staffing" in metrics and "Actual Staffing" in metrics
+        ])
+        if not complete_years:
+            raise ValueError("No year with both Approved and Actual staffing found")
+        latest = complete_years[-1]
+
+        approved_total   = 0
+        actual_total     = 0
+        cmd_actual_unif  = defaultdict(int)
+
+        for row in rows:
+            if row["Year"] != latest:
+                continue
+            if row["Organizational_Entity"] != "1 - Toronto Police Service":
+                continue
+            if row["Category"] != "Uniform":
+                continue
+            try:
+                count = int(str(row["Count_"]).replace(",", "")) if str(row["Count_"]).strip() else 0
+            except Exception:
+                count = 0
+            if row["Type_of_Metric"] == "Approved Staffing":
+                approved_total += count
+            elif row["Type_of_Metric"] == "Actual Staffing":
+                actual_total += count
+                cmd_actual_unif[row["Command_Name"]] += count
+
+        fill_pct = round(actual_total / approved_total * 100, 1) if approved_total > 0 else None
+        gap      = actual_total - approved_total
+        gap_str  = f"{'+' if gap >= 0 else ''}{gap} vs authorized {approved_total:,}"
+
+        csc     = cmd_actual_unif.get("Community Safety Command", 0)
+        soc     = cmd_actual_unif.get("Specialized Operations Command", 0)
+        csc_pct = round(csc / actual_total * 100, 1) if actual_total > 0 else None
+        soc_pct = round(soc / actual_total * 100, 1) if actual_total > 0 else None
+
+        return [
+            {
+                "indicator": "TPS Uniform Fill Rate",
+                "value": fill_pct,
+                "unit": "%",
+                "year": latest,
+                "context": gap_str,
+                "source": "Toronto Police Staffing by Command — Toronto Open Data",
+                "notes": f"Actual {actual_total:,} uniform vs {approved_total:,} authorized. Data lag: ~1 year.",
+                "sector": "public_safety",
+                "status": "ok",
+            },
+            {
+                "indicator": "TPS Community Safety Command Share",
+                "value": csc_pct,
+                "unit": "% of uniform",
+                "year": latest,
+                "context": f"{csc:,} of {actual_total:,} uniform officers",
+                "source": "Toronto Police Staffing by Command — Toronto Open Data",
+                "notes": "Higher % = more neighbourhood/divisional policing. Trend: 76.6% (2016) → 68.8% (2023).",
+                "sector": "public_safety",
+                "status": "ok",
+            },
+            {
+                "indicator": "TPS Specialized Operations Command Share",
+                "value": soc_pct,
+                "unit": "% of uniform",
+                "year": latest,
+                "context": f"{soc:,} of {actual_total:,} uniform officers",
+                "source": "Toronto Police Staffing by Command — Toronto Open Data",
+                "notes": "Includes tactical, emergency task force, intelligence units.",
+                "sector": "public_safety",
+                "status": "ok",
+            },
+        ]
+    except Exception as e:
+        return [_err("TPS Uniform Fill Rate", "public_safety", "%", str(e))]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ORCHESTRATOR
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -2422,6 +2572,7 @@ SECTOR_SCRAPERS = {
     "financial":   [fetch_bank_of_canada_rate, fetch_cad_usd_rate,
                     fetch_toronto_fuel_price, fetch_toronto_unemployment,
                     fetch_trreb_market, fetch_osb_insolvency],
+    "public_safety": [fetch_tps_personnel, fetch_tps_staffing_by_command],
 }
 
 
