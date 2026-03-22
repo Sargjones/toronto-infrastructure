@@ -3,6 +3,7 @@ name: TII data scraper
 on:
   schedule:
     - cron: "0 */6 * * *"
+    - cron: "0 8 * * 0"
   workflow_dispatch:
 
 env:
@@ -29,20 +30,26 @@ jobs:
       - name: Run scraper
         run: python tii_scraper.py --no-connectivity-check
 
-- name: Archive weekly snapshot
-  if: github.event_name == 'schedule' && contains(github.event.schedule, '0 6 * * 0')
-  run: |
-    WEEK=$(date +"%Y-W%V")
-    cp tii_data_latest.json tii_data_weekly_${WEEK}.json
-    cp tii_brief_latest.md archive/tii_brief_${WEEK}.md 2>/dev/null || true
-    git add tii_data_weekly_${WEEK}.json archive/ || true
-    git commit -m "Weekly archive: ${WEEK}" || echo "Nothing to archive"
-    git push
-
-      - name: Commit updated JSON
+      - name: Configure git
         run: |
           git config user.name  "TII Scraper"
           git config user.email "tii-scraper@users.noreply.github.com"
-          git add tii_data_latest.json tii_data_$(date +%Y%m%d).json || true
+
+      - name: Archive weekly snapshot
+        if: github.event.schedule == '0 8 * * 0'
+        run: |
+          WEEK=$(date -u +"%Y-W%V")
+          echo "Archiving week: ${WEEK}"
+          cp tii_data_latest.json tii_data_weekly_${WEEK}.json
+          mkdir -p archive
+          if [ -f tii_brief_latest.md ]; then
+            cp tii_brief_latest.md archive/tii_brief_${WEEK}.md
+          fi
+          git add tii_data_weekly_${WEEK}.json archive/ || true
+          git diff --cached --quiet || git commit -m "archive: weekly snapshot ${WEEK}"
+
+      - name: Commit updated JSON
+        run: |
+          git add tii_data_latest.json tii_data_$(date -u +%Y%m%d).json || true
           git diff --cached --quiet || git commit -m "data: scraper run $(date -u +%Y-%m-%dT%H:%MZ)"
           git push
