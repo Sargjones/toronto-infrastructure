@@ -749,17 +749,32 @@ function simpleMarkdown(md) {
 }
 
 async function loadBrief(isAlert) {
-  // Brief is manually authored — hide panel silently if file not present
   const panel = document.getElementById("brief-panel");
+  panel.style.display = "none";
   try {
     const res = await fetch(BRIEF_URL + "?t=" + Date.now());
     if(!res.ok) throw new Error("not found");
     const md = await res.text();
 
-    const lines = md.split("\n");
-    const dateMatch = lines.find(l => l.startsWith("*Week of"));
-    const briefDate = dateMatch ? dateMatch.replace(/\*/g, "").trim() : "";
-    const body = lines.slice(2).join("\n");
+    let lines = md.split("\n");
+
+    // Strip YAML frontmatter (--- ... ---) if present
+    if(lines[0] && lines[0].trim() === "---") {
+      const end = lines.findIndex((l, i) => i > 0 && l.trim() === "---");
+      if(end !== -1) lines = lines.slice(end + 1);
+    }
+
+    // Find the heading line and body
+    const headingIdx = lines.findIndex(l => l.startsWith("#"));
+    const dateMatch  = lines.find(l => l.startsWith("*Week of"));
+    const briefDate  = dateMatch ? dateMatch.replace(/\*/g, "").trim() : "";
+
+    // Body = everything after the heading (or from the top if no heading)
+    const bodyLines = lines.slice(headingIdx >= 0 ? headingIdx + 1 : 0);
+    const body = bodyLines.join("\n").trim();
+
+    // Hide panel if there is no real content
+    if(!body || body.replace(/\s/g, "").length < 20) return;
 
     const escalated = isAlert ? " brief-escalated" : "";
     const badge = isAlert
