@@ -178,6 +178,63 @@
   }
   .card.is-alert .card-note { color: var(--alert); }
 
+  /* ── Tier badge ────────────────────────────────────────────────────────── */
+  .card-tier {
+    display: inline-block;
+    font-size: 10px; font-weight: 600; letter-spacing: .04em;
+    padding: 1px 6px; border-radius: 99px;
+    margin-top: 5px;
+    background: rgba(24,95,165,0.10); color: var(--blue);
+    opacity: .8;
+  }
+  @media (prefers-color-scheme: dark) {
+    .card-tier { background: rgba(133,183,235,0.12); }
+  }
+
+  /* ── Notes tooltip ─────────────────────────────────────────────────────── */
+  /* The card is the positioning parent (already position:relative). */
+  .card-info-btn {
+    position: absolute; bottom: 9px; right: 10px;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: transparent;
+    border: 0.5px solid var(--border2);
+    color: var(--text3);
+    font-size: 10px; font-weight: 700; line-height: 16px;
+    text-align: center; cursor: default;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    transition: border-color .1s, color .1s;
+    z-index: 1;
+  }
+  .card:hover .card-info-btn { border-color: var(--blue); color: var(--blue); }
+
+  .card-tooltip {
+    display: none;
+    position: absolute;
+    bottom: calc(100% + 6px);
+    right: -6px;
+    width: 240px;
+    background: var(--surface);
+    border: 0.5px solid var(--border2);
+    border-radius: 8px;
+    padding: 9px 11px;
+    font-size: 11px; line-height: 1.5; color: var(--text2);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    z-index: 100;
+    pointer-events: none;
+    white-space: normal;
+  }
+  /* Flip to below the card if it's in the top half of the viewport */
+  .card-tooltip.flip-down {
+    bottom: auto;
+    top: calc(100% + 6px);
+  }
+  .card:hover .card-tooltip { display: block; }
+
+  /* Ensure cards in the last grid row don't clip their tooltip */
+  .cards { overflow: visible; }
+  .sector { overflow: visible; }
+
   .legend {
     display: flex; gap: 16px; flex-wrap: wrap;
     font-size: 12px; color: var(--text2);
@@ -302,6 +359,15 @@ function inferSector(name) {
   if(/bank|rate|cad|usd|fuel|price|bankruptcy|insolvency|eviction|unemployment|trreb|sales.to.new|selling price/.test(n)) return "financial";
   if(/tps|sworn|fill rate|community safety|specialized operations|police staffing/.test(n)) return "public_safety";
   return "other";
+}
+
+function inferTier(notes) {
+  // Extract tier label from the notes field written by the scraper.
+  // Returns "T1", "T2", "T3", or null.
+  if(!notes) return null;
+  const m = notes.match(/Tier\s+([123])\s*[—–-]/i);
+  if(!m) return null;
+  return "T" + m[1];
 }
 
 function fmtValue(r) {
@@ -433,6 +499,14 @@ function render(data) {
   }
 
   loadBrief((t.alert||0) > 0);
+
+  // After render: flip tooltips that would overflow below the viewport
+  requestAnimationFrame(() => {
+    document.querySelectorAll(".card-tooltip").forEach(tip => {
+      const rect = tip.getBoundingClientRect();
+      if(rect.top < 0) tip.classList.add("flip-down");
+    });
+  });
   const sectorsEl = document.getElementById("sectors");
   sectorsEl.innerHTML = "";
 
@@ -458,14 +532,28 @@ function render(data) {
       const contextHtml = (r.context && !isManual)
         ? `<div class="card-context">${r.context}</div>` : "";
 
+      // Tier badge — only when notes field carries tier framing
+      const tier = inferTier(r.notes);
+      const tierHtml = tier
+        ? `<div class="card-tier">${tier}</div>` : "";
+
+      // Info button + tooltip — only when there are notes to show
+      // Strip the tier prefix from display text so it's not double-shown
+      const tooltipText = (r.notes || "").replace(/^Tier\s+\d+\s*[—–-]\s*/i, "").trim();
+      const infoHtml = tooltipText
+        ? `<div class="card-info-btn" aria-label="Notes">i</div>
+           <div class="card-tooltip">${tooltipText}</div>` : "";
+
       card.innerHTML = `
         <div class="card-dot ${dotClass(s)}"></div>
         <div class="card-label">${r.indicator}</div>
         <div class="card-value">${isManual ? "manual" : fmtValue(r)}</div>
         ${!isManual ? `<div class="card-unit">${r.unit||""}</div>` : ""}
         ${contextHtml}
+        ${tierHtml}
         <div class="card-date">${fmtDate(r.data_date)}</div>
-        ${noteHtml}`;
+        ${noteHtml}
+        ${infoHtml}`;
       grid.appendChild(card);
     }
     sectorsEl.appendChild(sec);
@@ -474,7 +562,7 @@ function render(data) {
   document.getElementById("footer-sources").textContent =
     "Sources: IESO · Bank of Canada · StatsCan · Toronto Open Data · Environment Canada · data.ontario.ca · open.canada.ca · NAV Canada · Toronto Police ASR · Stooq · Stockr";
   document.getElementById("footer-run").textContent =
-    `TII v2.9 · scraper run ${rd} UTC · auto-refresh every 6 hours`;
+    `TII v3.0 · scraper run ${rd} UTC · auto-refresh every 6 hours`;
 }
 
 function showError(msg) {
