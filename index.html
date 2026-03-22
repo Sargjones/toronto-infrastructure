@@ -169,8 +169,9 @@
     font-size: 13px; font-weight: 400;
     color: var(--text3); margin-top: 2px;
   }
-  .card-unit  { font-size: 11px; color: var(--text3); margin-top: 2px; }
-  .card-date  { font-size: 11px; color: var(--text3); margin-top: 6px; }
+  .card-unit    { font-size: 11px; color: var(--text3); margin-top: 2px; }
+  .card-context { font-size: 11px; color: var(--text2); margin-top: 3px; font-style: italic; }
+  .card-date    { font-size: 11px; color: var(--text3); margin-top: 6px; }
   .card-note  {
     font-size: 11px; color: var(--warn);
     margin-top: 5px; line-height: 1.3;
@@ -282,11 +283,12 @@ const DATA_URL = "https://data.criticalto.ca/tii_data_latest.json";
 const BRIEF_URL = "https://data.criticalto.ca/tii_brief_latest.md";
 const REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
-const SECTOR_ORDER = ["energy","water","health","food","transport","environment","financial"];
+const SECTOR_ORDER = ["energy","water","health","food","transport","environment","financial","public_safety"];
 const SECTOR_LABELS = {
   energy:"Energy", water:"Water", health:"Health",
   food:"Food & prices", transport:"Transport",
-  environment:"Environment", financial:"Financial"
+  environment:"Environment", financial:"Financial",
+  public_safety:"Public Safety & Cost"
 };
 
 function inferSector(name) {
@@ -297,9 +299,8 @@ function inferSector(name) {
   if(/cpi|grocery|food bank|inflation/.test(n)) return "food";
   if(/ttc|ridership|port|dwell|pearson|notam|airport|cyyz/.test(n)) return "transport";
   if(/aqhi|air quality|smog/.test(n)) return "environment";
-  if(/bank|rate|cad|usd|fuel|price|bankruptcy|insolvency|eviction/.test(n)) return "financial";
-  if (/tps|sworn|fill rate|community safety|specialized operations|police staffing/i.test(name))
-  return "public_safety";
+  if(/bank|rate|cad|usd|fuel|price|bankruptcy|insolvency|eviction|unemployment|trreb|sales.to.new|selling price/.test(n)) return "financial";
+  if(/tps|sworn|fill rate|community safety|specialized operations|police staffing/.test(n)) return "public_safety";
   return "other";
 }
 
@@ -340,6 +341,7 @@ function simpleMarkdown(md) {
 }
 
 async function loadBrief(isAlert) {
+  // Brief is manually authored — hide panel silently if file not present
   const panel = document.getElementById("brief-panel");
   try {
     const res = await fetch(BRIEF_URL + "?t=" + Date.now());
@@ -453,12 +455,15 @@ function render(data) {
       if(r.threshold_note && !isManual) {
         noteHtml = `<div class="card-note">${r.threshold_note}</div>`;
       }
+      const contextHtml = (r.context && !isManual)
+        ? `<div class="card-context">${r.context}</div>` : "";
 
       card.innerHTML = `
         <div class="card-dot ${dotClass(s)}"></div>
         <div class="card-label">${r.indicator}</div>
         <div class="card-value">${isManual ? "manual" : fmtValue(r)}</div>
         ${!isManual ? `<div class="card-unit">${r.unit||""}</div>` : ""}
+        ${contextHtml}
         <div class="card-date">${fmtDate(r.data_date)}</div>
         ${noteHtml}`;
       grid.appendChild(card);
@@ -467,9 +472,9 @@ function render(data) {
   }
 
   document.getElementById("footer-sources").textContent =
-    "Sources: IESO · Bank of Canada · StatsCan · Toronto Open Data · Environment Canada · data.ontario.ca · EIA · open.canada.ca";
+    "Sources: IESO · Bank of Canada · StatsCan · Toronto Open Data · Environment Canada · data.ontario.ca · open.canada.ca · NAV Canada · Toronto Police ASR · Stooq · Stockr";
   document.getElementById("footer-run").textContent =
-    `TII v2.2 · scraper run ${rd} UTC · auto-refresh every 6 hours`;
+    `TII v2.9 · scraper run ${rd} UTC · auto-refresh every 6 hours`;
 }
 
 function showError(msg) {
