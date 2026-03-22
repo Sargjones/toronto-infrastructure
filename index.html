@@ -1,2220 +1,972 @@
-"""
-Toronto Infrastructure Intelligence (TII) — Data Scraper v2.9
-==============================================================
-Fixes vs v1.3:
-  1. IESO XML: replaced BeautifulSoup(html.parser) with xml.etree.ElementTree
-     (built-in, no external deps, handles XML namespaces correctly)
-  2. StatsCan all-items CPI: fixed vector — v41690973 is the confirmed correct
-     vector for Canada all-items CPI (not v41693202 which returned FAILED)
-  3. StatsCan gas storage: added multi-vector fallback; original v65201762 was
-     returning 0.0 — now tries several known Ontario storage vectors
-  4. Watermain breaks: removed datastore_active filter — dataset uses file
-     download not CKAN datastore; now gets download URL from any resource
-  5. TTC ridership: broadened resource format filter; XLSX resources may be
-     tagged as "XLSX", "xlsx", or just have .xlsx in URL
-  6. data.ontario.ca ER: added direct package ID fallback list since search
-     wasn't matching the dataset
-  7. OSB insolvency: added graceful handling when openpyxl not installed,
-     with clear install instruction
-
-INSTALL
--------
-    pip install requests beautifulsoup4 openpyxl
-    (lxml optional — not required, xml.etree.ElementTree handles IESO XML now)
-"""
-
-import argparse
-import os
-import csv
-import io
-import json
-import re
-import sys
-import xml.etree.ElementTree as ET
-from collections import Counter, defaultdict
-from datetime import datetime, date, timedelta
-from pathlib import Path
-
-import requests
-from bs4 import BeautifulSoup
-
-# Suppress XMLParsedAsHTMLWarning if BeautifulSoup is used on XML
-try:
-    from bs4 import XMLParsedAsHTMLWarning
-    import warnings
-    warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
-except ImportError:
-    pass
-
-
-# Cache for per-generator detail — populated by fetch_ieso_generation_mix,
-# written to ieso_generators_YYYYMMDD.json by run_all_scrapers.
-_IESO_GENERATOR_CACHE: dict = {}
-
-SESSION = requests.Session()
-SESSION.headers.update({
-    "User-Agent": "TII-Scraper/1.4 Toronto Infrastructure Intelligence",
-    "Accept": "application/json, text/html, text/csv, application/xml, */*",
-    "Content-Type": "application/json",
-})
-TIMEOUT = 25
-
-
-def _ok(indicator, value, unit, source, url, data_date, notes=""):
-    return {"indicator": indicator, "value": value, "unit": unit, "source": source,
-            "url": url, "retrieved_at": datetime.utcnow().isoformat() + "Z",
-            "data_date": str(data_date), "status": "ok", "notes": notes}
-
-def _err(indicator, source, url, error_msg):
-    return {"indicator": indicator, "value": None, "unit": None, "source": source,
-            "url": url, "retrieved_at": datetime.utcnow().isoformat() + "Z",
-            "data_date": None, "status": "error", "notes": f"ERROR: {error_msg}"}
-
-def _manual(indicator, source, notes):
-    return {"indicator": indicator, "value": None, "unit": None, "source": source,
-            "url": None, "retrieved_at": datetime.utcnow().isoformat() + "Z",
-            "data_date": None, "status": "manual", "notes": notes}
-
-
-# ── Threshold rules ────────────────────────────────────────────────────────
-# Each rule: (indicator_substring, warn_condition_fn, alert_condition_fn, warn_note, alert_note)
-# Conditions receive the numeric value. Non-numeric values skip threshold checks.
-# Status escalates: ok → warn → alert. Manual/error status never downgraded.
-THRESHOLDS = [
-    # Energy
-    ("Brent Crude Price",
-        lambda v: v > 80,   lambda v: v > 100,
-        "Elevated — above $80/bbl",
-        "Crisis level — above $100/bbl (Hormuz threshold)"),
-    ("Gas Output (MW)",
-        lambda v: v > 3000, lambda v: v > 5000,
-        "Gas peakers elevated — demand stress signal",
-        "Gas peakers at crisis level — grid under significant stress"),
-    ("Peak Demand Index",
-        lambda v: v > 85,   lambda v: v > 95,
-        "Demand elevated — above 85% of 2024 peak",
-        "Demand critical — above 95% of 2024 peak"),
-    # Water / Shelter
-    ("Shelter Occupancy",
-        lambda v: v > 4500, lambda v: v > 4700,
-        "Shelter system above 94% of capacity",
-        "Shelter system at or above 98% — crisis threshold"),
-    ("Watermain Break Rate",
-        lambda v: v > 15,   lambda v: v > 25,
-        "Elevated break rate — above seasonal average",
-        "Critical break rate — infrastructure stress"),
-    # Housing market
-    ("TRREB Sales-to-New-Listings Ratio",
-        lambda v: v > 60,  lambda v: v > 70,
-        "Seller's market — SNR above 60%, price pressure building",
-        "Strong seller's market — SNR above 70%, significant affordability stress"),
-    # Labour market
-    ("Toronto Unemployment Rate",
-        lambda v: v > 8.0,  lambda v: v > 10.0,
-        "Unemployment elevated — above 8% (high vs pre-tariff baseline)",
-        "Unemployment at recession level — above 10%"),
-    # Airport operations
-    ("Pearson Airport Operations",
-        lambda v: v >= 1,  lambda v: v >= 2,
-        "Reduced capacity or approach restriction at Pearson",
-        "Runway closure or ATC flow control active at Pearson"),
-    # Pipeline utilization
-    ("TCPL Parkway Receipts (GTA supply)",
-        lambda v: v > 85,  lambda v: v > 95,
-        "Parkway pipeline near capacity — GTA supply stress risk",
-        "Parkway pipeline at capacity — GTA supply emergency risk"),
-    ("TCPL Northern Ontario Line",
-        lambda v: v > 85,  lambda v: v > 95,
-        "Northern Ontario Line near capacity — upstream supply stress",
-        "Northern Ontario Line at capacity — upstream supply emergency"),
-    # Financial
-    ("CAD/USD Exchange Rate",
-        lambda v: v > 1.40, lambda v: v > 1.50,
-        "CAD weakening — above 1.40 (import cost pressure)",
-        "CAD under severe stress — above 1.50"),
-    ("Fuel Price — Toronto",
-        lambda v: v > 150,  lambda v: v > 185,
-        "Fuel price elevated — above 150¢/L",
-        "Fuel price critical — above 185¢/L"),
-    ("Monthly Bankruptcy Filings",
-        lambda v: v > 5000, lambda v: v > 7000,
-        "Insolvency filings elevated — above 5,000/month (Ontario)",
-        "Insolvency filings critical — above 7,000/month"),
-    # Health
-    ("Ontario ICU Occupancy",
-        lambda v: v > 85,   lambda v: v > 95,
-        "ICU occupancy elevated — above 85%",
-        "ICU occupancy critical — above 95%"),
-    # Environment
-    ("Air Quality (AQHI)",
-        lambda v: v >= 4,   lambda v: v >= 7,
-        "Moderate risk — AQHI 4-6",
-        "High risk — AQHI 7+"),
-    # Boil water advisory — any active advisory is an immediate alert
-    ("Boil Water Advisories",
-        lambda v: v >= 1,  lambda v: v >= 1,
-        "Active boil water advisory — public health signal",
-        "Active boil water advisory — significant public health event"),
-    # Water outages
-    ("Active Water Outages",
-        lambda v: v >= 3,  lambda v: v >= 8,
-        "Multiple active outages — monitor for escalation",
-        "High number of active outages — potential systemic stress"),
-    ("Active Watermain Breaks",
-        lambda v: v >= 2,  lambda v: v >= 5,
-        "Multiple active breaks — elevated infrastructure stress",
-        "High number of active breaks — systemic infrastructure alert"),
-    # Food
-    ("Grocery Price Inflation",
-        lambda v: v > 170,  lambda v: v > 185,
-        "Food CPI elevated — above index 170",
-        "Food CPI critical — above index 185"),
-]
-
-def apply_thresholds(result):
-    """
-    Evaluate threshold rules against a result dict.
-    Upgrades status from 'ok' to 'warn' or 'alert' as appropriate.
-    Never downgrades manual/error status.
-    Returns the result dict (mutated in place).
-    """
-    if result.get("status") not in ("ok", "warn"):
-        return result
-    value = result.get("value")
-    if value is None:
-        return result
-    try:
-        v = float(value)
-    except (TypeError, ValueError):
-        return result
-
-    indicator = result.get("indicator", "")
-    for (substr, warn_fn, alert_fn, warn_note, alert_note) in THRESHOLDS:
-        if substr.lower() not in indicator.lower():
-            continue
-        try:
-            if alert_fn(v) and alert_note:
-                result["status"] = "alert"
-                result["threshold_note"] = alert_note
-            elif warn_fn(v) and warn_note:
-                if result["status"] != "alert":
-                    result["status"] = "warn"
-                    result["threshold_note"] = warn_note
-        except Exception:
-            pass
-        break  # first matching rule wins
-
-    return result
-
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTOR: ENERGY
-# ══════════════════════════════════════════════════════════════════════════════
-
-def fetch_ieso_generation_mix():
-    """
-    IESO GenOutputbyFuelHourly — annual XML.
-
-    v1.7: Confirmed schema from live document inspection:
-      Document > DocBody > DailyData > Day
-                                     > HourlyData > Hour
-                                                  > FuelTotal > Fuel        (= "NUCLEAR" etc.)
-                                                              > EnergyValue  (MWh as float)
-
-    This file is fuel-aggregated by hour — no individual generator names.
-    Per-generator detail lives in PUB_GenOutputCapability (separate endpoint).
-
-    _IESO_GENERATOR_CACHE is populated with fuel-level records here;
-    true per-generator breakdown can be added from GenOutputCapability later.
-    """
-    year = date.today().strftime("%Y")
-    url = f"https://reports-public.ieso.ca/public/GenOutputbyFuelHourly/PUB_GenOutputbyFuelHourly_{year}.xml"
-
-    try:
-        r = SESSION.get(url, timeout=30)
-        r.raise_for_status()
-    except requests.RequestException as e:
-        return [_err("IESO Generation Mix", "IESO GenOutputbyFuelHourly", url, str(e))]
-
-    try:
-        root = ET.fromstring(r.content)
-    except ET.ParseError as e:
-        return [_err("IESO Generation Mix", "IESO GenOutputbyFuelHourly", url,
-                     f"XML parse error: {e}")]
-
-    ns = root.tag.split("}")[0] + "}" if root.tag.startswith("{") else ""
-
-    # Walk DailyData blocks — take the last one (most recent day)
-    daily_blocks = root.findall(f".//{ns}DailyData") or root.findall(".//DailyData")
-    if not daily_blocks:
-        tags = sorted({el.tag.split("}")[-1] for el in root.iter()})
-        return [_err("IESO Generation Mix", "IESO GenOutputbyFuelHourly", url,
-                     f"No DailyData elements. Root: {root.tag}. Tags: {tags}")]
-
-    # Annual file has DailyData for every day of the year including future placeholders.
-    # Must search backwards through DailyData blocks to find the last one with real data.
-    fuel_totals = {}
-    latest_hour = None
-    day_str = ""
-
-    for last_day in reversed(daily_blocks):
-        d_el = last_day.find(f"{ns}Day") or last_day.find("Day")
-        candidate_day = (d_el.text or "").strip() if d_el is not None else ""
-
-        hourly_blocks = (last_day.findall(f".//{ns}HourlyData") or
-                         last_day.findall(".//HourlyData"))
-
-        # Search backwards through hours in this day for populated data.
-        # Use local-name matching to bypass namespace prefix issues entirely.
-        for hourly in reversed(hourly_blocks):
-            # Index all direct and grandchild elements by local tag name
-            by_tag = {}
-            for child in hourly:
-                local = child.tag.split("}")[-1]
-                by_tag.setdefault(local, []).append(child)
-
-            h_list = by_tag.get("Hour", [])
-            if not h_list or not h_list[0].text:
-                continue
-            try:
-                hour_num = int(h_list[0].text.strip())
-            except ValueError:
-                continue
-
-            candidate = {}
-            for ft in by_tag.get("FuelTotal", []):
-                # Index FuelTotal children by local name
-                ft_kids = {c.tag.split("}")[-1]: c for c in ft}
-                fuel_el = ft_kids.get("Fuel")
-                ev_el   = ft_kids.get("EnergyValue")
-                if fuel_el is None or ev_el is None:
-                    continue
-                # EnergyValue > Output holds the MW number
-                ev_kids = {c.tag.split("}")[-1]: c for c in ev_el}
-                out_el  = ev_kids.get("Output")
-                if out_el is None:
-                    continue
-                fuel     = (fuel_el.text or "").strip().upper()
-                val_text = (out_el.text  or "").strip()
-                if not fuel or not val_text:
-                    continue
-                try:
-                    candidate[fuel] = float(val_text)
-                except ValueError:
-                    continue
-
-            if candidate:
-                fuel_totals = candidate
-                latest_hour = hour_num
-                day_str     = candidate_day
-                break  # found populated hour in this day
-
-        if fuel_totals:
-            break  # found populated day — stop searching
-
-    if not fuel_totals:
-        tags = sorted({el.tag.split("}")[-1] for el in root.iter()})
-        return [_err("IESO Generation Mix", "IESO GenOutputbyFuelHourly", url,
-                     f"No data in {len(daily_blocks)} DailyData blocks. "
-                     f"Tags in document: {tags}")]
-
-    # Populate cache (fuel-level, not generator-level — upgrade later with GenOutputCapability)
-    _IESO_GENERATOR_CACHE.clear()
-    _IESO_GENERATOR_CACHE.update({
-        "retrieved_at":    datetime.utcnow().isoformat() + "Z",
-        "data_date":       day_str or str(date.today()),
-        "hour":            latest_hour,
-        "source_url":      url,
-        "note":            "Fuel-aggregated totals. Per-generator detail available from "
-                           "PUB_GenOutputCapability (not yet implemented).",
-        "fuel_totals_mw":  {k: round(v, 1) for k, v in fuel_totals.items()},
-        "generators":      [
-            {"name": fuel, "fuel": fuel,
-             "output_mw": round(mw, 1), "capacity_mw": None,
-             "hour": latest_hour, "data_date": day_str or str(date.today())}
-            for fuel, mw in sorted(fuel_totals.items(),
-                                   key=lambda x: x[1], reverse=True)
-        ],
-    })
-
-    total_mw = sum(fuel_totals.values())
-    # data_date: store ISO date only; hour goes in notes so fmtDate renders cleanly
-    data_date = day_str if day_str else str(date.today())
-    hour_note = f"Hour ending {latest_hour:02d}:00 UTC."
-    fuel_summary = ", ".join(f"{k}: {round(v)}MW" for k, v in
-                             sorted(fuel_totals.items(), key=lambda x: x[1], reverse=True))
-    results = [_ok("Total Generation (MW)", round(total_mw, 1), "MW",
-                   "IESO GenOutputbyFuelHourly", url, data_date,
-                   f"Tier 3 — Local real-time delivery. {hour_note} "
-                   f"Mix: {fuel_summary}. "
-                   f"Chain terminus: Brent/NGAS (Tier 1) → TCPL utilization (Tier 2) → "
-                   f"IESO dispatch / pump price (Tier 3).")]
-    GAS_NOTE = (
-        "Tier 3 — Local real-time delivery. Gas peakers are marginal-cost units dispatched "
-        "when baseload (nuclear/hydro) is insufficient. Output >3,000 MW = demand stress; "
-        ">5,000 MW = grid under significant pressure. Elevated gas dispatch correlates with "
-        "higher wholesale electricity prices and increased exposure to Tier 1/2 commodity risk."
-    )
-    for key, (name, unit) in {
-        "NUCLEAR": ("Nuclear Output (MW)", "MW"),
-        "HYDRO":   ("Hydro Output (MW)",   "MW"),
-        "GAS":     ("Gas Output (MW)",     "MW"),
-        "WIND":    ("Wind Output (MW)",    "MW"),
-        "SOLAR":   ("Solar Output (MW)",   "MW"),
-        "BIOFUEL": ("Biofuel Output (MW)", "MW"),
-    }.items():
-        notes = (GAS_NOTE + f" {hour_note}") if key == "GAS" else hour_note
-        results.append(_ok(name, round(fuel_totals.get(key, 0), 1), unit,
-                           "IESO GenOutputbyFuelHourly", url, data_date, notes))
-    return results
-
-
-def fetch_ieso_ontario_demand():
-    """
-    IESO Ontario Demand multiday — also uses ElementTree now.
-    The ashx file is XML. ElementTree handles it correctly.
-    """
-    PEAK_REF_MW = 25000
-    url = "https://www.ieso.ca/-/media/Files/IESO/Power-Data/Ontario-Demand-multiday.ashx"
-
-    try:
-        r = SESSION.get(url, timeout=TIMEOUT)
-        r.raise_for_status()
-    except requests.RequestException as e:
-        return [_err("Peak Demand Index", "IESO Ontario Demand Multiday", url, str(e))]
-
-    demand_val = None
-    try:
-        root = ET.fromstring(r.content)
-        ns = root.tag.split("}")[0] + "}" if root.tag.startswith("{") else ""
-        # Search for demand elements
-        for tag in ["OntarioDemand", "Demand", "TotalDemand", "MarketDemand",
-                    "ActualDemand", "ForecastDemand"]:
-            els = root.findall(f".//{ns}{tag}") or root.findall(f".//{tag}")
-            for el in reversed(els):
-                if el.text:
-                    try:
-                        v = float(el.text.strip())
-                        if v > 0:
-                            demand_val = v
-                            break
-                    except ValueError:
-                        pass
-            if demand_val:
-                break
-    except ET.ParseError:
-        pass
-
-    # Fallback: numeric scan of content (works even if XML structure changes)
-    if demand_val is None:
-        for line in r.text.splitlines():
-            nums = re.findall(r'\b(\d{4,5}(?:\.\d+)?)\b', line)
-            for n in nums:
-                v = float(n)
-                if 5000 < v < 30000:
-                    demand_val = v
-                    break
-            if demand_val:
-                break
-
-    if demand_val is None:
-        return [_err("Peak Demand Index", "IESO Ontario Demand Multiday", url,
-                     f"Could not parse demand from {len(r.content)} bytes")]
-
-    peak_index = round(demand_val / PEAK_REF_MW * 100, 1)
-    return [
-        _ok("Ontario Demand (MW)", demand_val, "MW",
-            "IESO Ontario Demand Multiday", url, date.today()),
-        _ok("Peak Demand Index", peak_index, "% of 2024 peak",
-            "IESO Ontario Demand Multiday", url, date.today(),
-            f"{demand_val} MW ÷ {PEAK_REF_MW} MW × 100"),
-    ]
-
-
-
-def fetch_brent_crude():
-    """
-    Brent crude spot price.
-
-    TIER POSITION: Tier 1 — Global commodity layer.
-    Brent is the first link in the Ontario energy supply chain:
-      Tier 1 → Brent crude (global commodity benchmark, set by ICE/OPEC dynamics)
-      Tier 2 → TCPL pipeline utilization (continental delivery infrastructure)
-      Tier 3 → Toronto pump price / IESO gas peaker dispatch (local real-time delivery)
-
-    Sources tried in order:
-      1. FRED (St. Louis Fed) — DCOILBRENTEU series. Daily ICE Brent spot price in USD/bbl.
-         No API key required. ~1 business day lag. Highly reliable US government data service.
-      2. Stooq.com — cb.f (ICE Brent front-month futures). No API key, non-US jurisdiction.
-      3. Stooq.com — lco.f (alternate ICE Brent ticker).
-    """
-    NOTES_TEMPLATE = (
-        "Tier 1 — Global commodity. ICE Brent crude: global benchmark for ~2/3 of world oil trade. "
-        "Ontario supply chain: Brent (Tier 1) → TCPL pipeline utilization (Tier 2) → "
-        "Toronto pump price / IESO gas dispatch (Tier 3). "
-        "CAD/USD amplifies or dampens pass-through to Ontario consumers. "
-        "Warn >$80/bbl (refinery margin pressure), Alert >$100/bbl (Hormuz disruption threshold). "
-        "Source: {source}."
-    )
-
-    # ── Source 1: FRED DCOILBRENTEU ───────────────────────────────────────────
-    # CSV endpoint — no API key, returns full history, last row = most recent business day
-    fred_url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DCOILBRENTEU"
-    try:
-        r = SESSION.get(fred_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=TIMEOUT)
-        r.raise_for_status()
-        lines = r.text.strip().splitlines()
-        # Header: DATE,DCOILBRENTEU
-        # Rows: 1987-05-20,18.63  — missing values shown as "."
-        for row in reversed(lines[1:]):
-            parts = row.split(",")
-            if len(parts) == 2 and parts[1].strip() not in ("", ".", "N/D"):
-                date_str = parts[0].strip()
-                price = round(float(parts[1].strip()), 2)
-                return [_ok("Brent Crude Price", price, "USD/bbl",
-                            "FRED — DCOILBRENTEU (St. Louis Fed)", fred_url, date_str,
-                            NOTES_TEMPLATE.format(source="FRED DCOILBRENTEU — St. Louis Federal Reserve, daily ICE Brent spot price"))]
-    except Exception as e:
-        fred_error = str(e)
-    else:
-        fred_error = "All FRED rows missing/null"
-
-    # ── Source 2 & 3: Stooq CSV fallback ─────────────────────────────────────
-    stooq_candidates = [
-        ("cb.f",  "https://stooq.com/q/d/l/?s=cb.f&i=d&l=5"),
-        ("lco.f", "https://stooq.com/q/d/l/?s=lco.f&i=d&l=5"),
-    ]
-    last_error = f"FRED failed ({fred_error}); Stooq also failed"
-    for ticker, url in stooq_candidates:
-        try:
-            r = SESSION.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=TIMEOUT)
-            r.raise_for_status()
-            lines = r.text.strip().splitlines()
-            if len(lines) < 2:
-                last_error = f"FRED failed; {ticker}: fewer than 2 lines"
-                continue
-            for row in reversed(lines[1:]):
-                parts = row.split(",")
-                if len(parts) >= 5 and parts[4].strip() not in ("", "null", "N/D"):
-                    date_str = parts[0].strip()
-                    price = round(float(parts[4].strip()), 2)
-                    return [_ok("Brent Crude Price", price, "USD/bbl",
-                                f"Stooq.com — ICE Brent ({ticker})", url, date_str,
-                                NOTES_TEMPLATE.format(source=f"Stooq.com ICE Brent futures ({ticker})"))]
-            last_error = f"FRED failed; {ticker}: all rows null/N/D"
-        except Exception as e:
-            last_error = f"FRED failed ({fred_error}); {ticker}: {e}"
-            continue
-
-    return [_err("Brent Crude Price", "FRED / Stooq.com", fred_url, last_error)]
-
-
-def fetch_toronto_shelter():
-    """Toronto Open Data — Daily Shelter. Unchanged — was working."""
-    pkg = _ckan_package("daily-shelter-overnight-service-occupancy-capacity")
-    if not pkg:
-        return [_err("Shelter System Capacity", "Toronto Open Data",
-                     TORONTO_CKAN_BASE, "Package not found")]
-
-    resource_id = next((r["id"] for r in pkg.get("resources", [])
-                        if r.get("datastore_active")), None)
-    if not resource_id:
-        return [_err("Shelter System Capacity", "Toronto Open Data",
-                     TORONTO_CKAN_BASE, "No active datastore resource")]
-
-    records = _ckan_datastore(resource_id, 3000, "OCCUPANCY_DATE desc")
-    if not records:
-        return [_err("Shelter System Capacity", "Toronto Open Data",
-                     TORONTO_CKAN_BASE, "Datastore empty or failed")]
-
-    most_recent_date = records[0].get("OCCUPANCY_DATE", "")
-    if not most_recent_date:
-        return [_err("Shelter System Capacity", "Toronto Open Data",
-                     TORONTO_CKAN_BASE, "OCCUPANCY_DATE field not found")]
-
-    day_recs = [rec for rec in records if rec.get("OCCUPANCY_DATE") == most_recent_date]
-    total_occ = total_cap = 0
-    for rec in day_recs:
-        for k in ["OCCUPANCY", "OCCUPIED_BEDS", "occupied_beds"]:
-            if k in rec:
-                try: total_occ += float(rec[k] or 0); break
-                except (ValueError, TypeError): pass
-        for k in ["CAPACITY_ACTUAL", "CAPACITY_ACTUAL_BED", "capacity_actual_bed"]:
-            if k in rec:
-                try: total_cap += float(rec[k] or 0); break
-                except (ValueError, TypeError): pass
-
-    occ_rate = round(total_occ / total_cap * 100, 1) if total_cap > 0 else None
-    api_url = f"{TORONTO_CKAN_BASE}/api/3/action/datastore_search?resource_id={resource_id}"
-    return [
-        _ok("Shelter System Capacity", int(total_cap), "beds/spaces",
-            "Toronto Open Data — Daily Shelter", api_url, most_recent_date,
-            f"{len(day_recs)} programs at 4am snapshot"),
-        _ok("Shelter Occupancy", int(total_occ), "occupied",
-            "Toronto Open Data — Daily Shelter", api_url, most_recent_date,
-            f"Occupancy rate: {occ_rate}%. Threshold: 95% = Warning"),
-    ]
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTOR: HEALTH
-# ══════════════════════════════════════════════════════════════════════════════
-
-def fetch_active_water_outages():
-    """
-    Toronto Water — active watermain breaks and planned outages.
-    Source: City of Toronto ArcGIS REST API (COT_Geospatial_Water_Outage_View)
-    This is the live data feed behind toronto.ca/no-water-map.
-    Updated in real time as breaks are reported and restored.
-
-    Query: all records where DateandTimeServiceRestored = NULL
-    (i.e. service not yet restored = currently active)
-    and WaterOutageEdit7b_Bypass <> 1 (excludes test/bypass records)
-
-    Returns:
-    - Active watermain breaks count
-    - Active planned maintenance outages count
-    - Total active outages
-    """
-    BASE = ("https://services3.arcgis.com/b9WvedVPoizGfvfD/arcgis/rest/services"
-            "/COT_Geospatial_Water_Outage_View/FeatureServer/0/query")
-    params = {
-        "where": "DateandTimeServiceRestored = NULL AND WaterOutageEdit7b_Bypass <> 1",
-        "outFields": "*",
-        "f": "geojson",
-        "returnGeometry": "false",
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Toronto Infrastructure Intelligence</title>
+<style>
+  :root {
+    --bg:       #f8f8f6;
+    --surface:  #ffffff;
+    --surface2: #f1efea;
+    --border:   rgba(0,0,0,0.10);
+    --border2:  rgba(0,0,0,0.18);
+    --text1:    #1a1a18;
+    --text2:    #5a5a56;
+    --text3:    #9a9a94;
+    --ok:       #3b6d11;
+    --ok-bg:    #eaf3de;
+    --warn:     #854f0b;
+    --warn-bg:  #faeeda;
+    --alert:    #a32d2d;
+    --alert-bg: #fcebeb;
+    --manual:   #888780;
+    --manual-bg:#f1efea;
+    --blue:     #185fa5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:       #1a1a18;
+      --surface:  #242422;
+      --surface2: #2e2e2c;
+      --border:   rgba(255,255,255,0.10);
+      --border2:  rgba(255,255,255,0.18);
+      --text1:    #f0efe8;
+      --text2:    #a8a8a0;
+      --text3:    #686860;
+      --ok:       #97c459;
+      --ok-bg:    #1e2e10;
+      --warn:     #ef9f27;
+      --warn-bg:  #2a1e08;
+      --alert:    #f09595;
+      --alert-bg: #2e1010;
+      --manual:   #68686a;
+      --manual-bg:#28282a;
+      --blue:     #85b7eb;
     }
-    url = BASE + "?" + "&".join(f"{k}={v}" for k, v in params.items())
-
-    try:
-        r = SESSION.get(BASE, params=params, timeout=TIMEOUT)
-        r.raise_for_status()
-        data = r.json()
-    except (requests.RequestException, json.JSONDecodeError) as e:
-        return [_err("Active Water Outages", "Toronto Water ArcGIS API", url, str(e))]
-
-    features = data.get("features", [])
-    if not features and "error" in data:
-        return [_err("Active Water Outages", "Toronto Water ArcGIS API", url,
-                     f"API error: {data['error']}")]
-
-    # Categorise by outage type
-    # Common type field names in Toronto Water ArcGIS: OutageType, Type, ReasonForOutage
-    breaks   = 0
-    planned  = 0
-    unknown  = 0
-    oldest_start = None
-
-    for feat in features:
-        props = feat.get("properties", {})
-        # Find the type field — try common names
-        type_val = (props.get("OutageType") or props.get("Type") or
-                    props.get("ReasonForOutage") or props.get("OUTAGETYPE") or "")
-        type_str = str(type_val).lower()
-
-        if any(k in type_str for k in ["break", "emergency", "watermain"]):
-            breaks += 1
-        elif any(k in type_str for k in ["planned", "maintenance", "scheduled"]):
-            planned += 1
-        else:
-            unknown += 1
-
-        # Track oldest active outage start time
-        start_ts = (props.get("DateandTimeServiceInterrupted") or
-                    props.get("StartDate") or props.get("DateTimeStart"))
-        if start_ts and isinstance(start_ts, (int, float)):
-            # ArcGIS returns epoch milliseconds
-            from datetime import datetime as _dt
-            try:
-                dt = _dt.utcfromtimestamp(start_ts / 1000)
-                if oldest_start is None or dt < oldest_start:
-                    oldest_start = dt
-            except (ValueError, OSError):
-                pass
-
-    total = len(features)
-    oldest_str = oldest_start.strftime("%Y-%m-%d %H:%M UTC") if oldest_start else "unknown"
-
-    results = [
-        _ok("Active Water Outages", total, "active outages",
-            "Toronto Water — No Water Map (ArcGIS)", url, str(date.today()),
-            f"Breaks: {breaks}, Planned maintenance: {planned}, Other: {unknown}. "
-            f"Oldest active since: {oldest_str}. "
-            f"Source: toronto.ca/no-water-map — real-time feed."),
-    ]
-
-    # Add breakdown indicators if there are active breaks
-    if breaks > 0:
-        results.append(_ok("Active Watermain Breaks", breaks, "breaks",
-                           "Toronto Water — No Water Map (ArcGIS)", url,
-                           str(date.today()),
-                           "Emergency watermain breaks with service interrupted."))
-    if planned > 0:
-        results.append(_ok("Planned Maintenance Outages", planned, "outages",
-                           "Toronto Water — No Water Map (ArcGIS)", url,
-                           str(date.today()),
-                           "Scheduled maintenance with planned service interruption."))
-
-    return results
-
-
-def fetch_toronto_unemployment():
-    """
-    Toronto CMA unemployment rate — StatsCan WDS API.
-    Table 14-10-0294-01: Labour force characteristics by CMA, 3-month moving average.
-    Coordinate 23.5.1.1 = Toronto CMA, Unemployment rate, Estimate, Seasonally adjusted.
-    Released monthly, lags ~5 weeks after reference month.
-    Context: Toronto CMA at 8.9% in Sep 2025 — elevated vs pre-tariff levels.
-    Alert threshold: >10% = recession-level stress.
-    """
-    WDS_URL = "https://www150.statcan.gc.ca/t1/wds/rest/getDataFromCubePidCoordAndLatestNPeriods"
-    # productId=14100294, coordinate=23.5.1.1 (Toronto, Unemployment rate, Estimate, SA)
-    payload = [{"productId": 14100294, "coordinate": "23.5.1.1", "latestN": 2}]
-
-    try:
-        r = SESSION.post(WDS_URL, json=payload, timeout=30)
-        r.raise_for_status()
-        data = r.json()
-    except (requests.RequestException, json.JSONDecodeError) as e:
-        return [_err("Toronto Unemployment Rate", "StatsCan WDS (Table 14-10-0294-01)",
-                     WDS_URL, str(e))]
-
-    try:
-        obj = data[0].get("object", {})
-        if data[0].get("status") != "SUCCESS":
-            raise ValueError(f"API status: {data[0].get('status')} — {obj}")
-        points = obj.get("vectorDataPoint", [])
-        if not points:
-            raise ValueError("No data points returned")
-        latest = points[-1]
-        rate = float(latest["value"])
-        ref = latest.get("refPer", "unknown")
-        vector_id = obj.get("vectorId", "?")
-    except (KeyError, ValueError, TypeError, IndexError) as e:
-        return [_err("Toronto Unemployment Rate", "StatsCan WDS (Table 14-10-0294-01)",
-                     WDS_URL, f"Parse error: {e}. Response: {str(data)[:200]}")]
-
-    return [_ok("Toronto Unemployment Rate", round(rate, 1), "%",
-                "StatsCan LFS — Table 14-10-0294-01 (Toronto CMA)", WDS_URL, ref,
-                f"3-month moving average, seasonally adjusted. "
-                f"Vector v{vector_id}. Released ~5 weeks after reference month. "
-                f"Sep 2025: 8.9%. Pre-tariff baseline (2023): ~6.5%.")]
-
-
-def fetch_toronto_boil_advisories():
-    """
-    Toronto Water — active boil water advisories.
-    Scrapes toronto.ca drinking water quality page.
-    Toronto's water system is large and well-maintained — advisories are rare.
-    A non-zero count is a significant public health signal.
-    Alert threshold: any active advisory = alert (zero is normal).
-    """
-    # Primary: Toronto Water drinking water advisories page
-    urls_to_try = [
-        "https://www.toronto.ca/services-payments/water-environment/tap-water-in-toronto/",
-        "https://www.toronto.ca/services-payments/water-environment/tap-water-in-toronto/drinking-water-compliance-and-testing/",
-    ]
-
-    advisory_count = 0
-    advisory_details = []
-    source_url = urls_to_try[0]
-
-    for url in urls_to_try:
-        try:
-            r = SESSION.get(url, timeout=TIMEOUT,
-                            headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.5"})
-            r.raise_for_status()
-            from bs4 import BeautifulSoup as _BS
-            soup = _BS(r.content, "html.parser")
-            text = soup.get_text(" ", strip=True).lower()
-
-            # Look for advisory language
-            if "boil water" in text or "boil-water" in text:
-                # Count specific advisory mentions
-                advisory_keywords = [
-                    "boil water advisory", "boil-water advisory",
-                    "do not use", "water advisory in effect"
-                ]
-                for kw in advisory_keywords:
-                    count = text.count(kw)
-                    if count > 0:
-                        advisory_count += count
-                        advisory_details.append(f"'{kw}' found {count}x")
-
-                # If we found mentions, this page has the info
-                if advisory_count > 0:
-                    source_url = url
-                    break
-                else:
-                    # "boil water" mentioned but in general context, not active advisory
-                    # Check for "no current advisories" language
-                    if any(phrase in text for phrase in
-                           ["no current", "no active", "no boil water advisory",
-                            "no advisories", "water is safe"]):
-                        advisory_count = 0
-                        source_url = url
-                        break
-            elif any(phrase in text for phrase in
-                     ["no current", "no active", "water is safe", "meets all"]):
-                advisory_count = 0
-                source_url = url
-                break
-        except requests.RequestException:
-            continue
-
-    notes = (f"Active advisories: {advisory_count}. Details: {advisory_details}."
-             if advisory_count > 0
-             else "No active boil water advisories detected. "
-                  "Toronto's 4 treatment plants serve ~4M people. "
-                  "An advisory would appear at toronto.ca/tap-water.")
-
-    return [_ok("Boil Water Advisories", advisory_count, "active advisories",
-                "Toronto Water — toronto.ca", source_url,
-                str(date.today()), notes)]
-
-
-def fetch_trreb_market():
-    """
-    TRREB GTA housing market — sales-to-new-listings ratio and average price.
-    Source: trreb.ca/market-data/quick-market-overview/
-    Data embedded as JavaScript variables in page HTML, updated monthly.
-    Published first week of each month for the prior month.
-
-    Key indicators:
-    - Sales-to-new-listings ratio (SNR):
-        <40% = buyer's market
-        40-60% = balanced market
-        >60% = seller's market
-    - Average selling price (all residential)
-    - Total sales (year-over-year)
-    - Total new listings (year-over-year)
-    """
-    URL = "https://trreb.ca/market-data/quick-market-overview/"
-    try:
-        r = SESSION.get(URL, timeout=TIMEOUT,
-                        headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.6"})
-        r.raise_for_status()
-    except requests.RequestException as e:
-        return [_err("TRREB Sales-to-New-Listings Ratio", "TRREB Quick Overview", URL, str(e))]
-
-    try:
-        from bs4 import BeautifulSoup as _BS
-        import re as _re
-        soup = _BS(r.content, "html.parser")
-
-        # All data is in inline script blocks as JS variables
-        scripts = " ".join(s.string or "" for s in soup.find_all("script", src=False))
-
-        def extract_js_obj(scripts, var_name):
-            """Extract last value from a JS object literal like: let Var = {"Feb'25": 32, "Feb'26": 36}"""
-            pattern = rf'let\s+{var_name}\s*=\s*\{{([^}}]+)\}}'
-            m = _re.search(pattern, scripts)
-            if not m:
-                return None, None, None
-            pairs = _re.findall(r'"([^"]+)":\s*([\d.]+)', m.group(1))
-            if not pairs:
-                return None, None, None
-            # Return latest period and value, plus prior period value
-            latest_period, latest_val = pairs[-1]
-            prior_val = pairs[-2][1] if len(pairs) >= 2 else None
-            return latest_period, float(latest_val), float(prior_val) if prior_val else None
-
-        # Sales-to-new-listings ratio
-        snr_period, snr_val, snr_prior = extract_js_obj(scripts, "TnlSnrData")
-        # Average selling price
-        asp_period, asp_val, asp_prior = extract_js_obj(scripts, "AspYoyData")
-        # Total residential transactions
-        trt_period, trt_val, trt_prior = extract_js_obj(scripts, "TrtYoyData")
-        # Total new listings
-        tnl_period, tnl_val, tnl_prior = extract_js_obj(scripts, "TnlYoyData")
-
-        if snr_val is None:
-            raise ValueError("Could not parse TnlSnrData from page — page structure may have changed")
-
-        # Market classification
-        if snr_val < 40:
-            market_type = "buyer's market"
-        elif snr_val <= 60:
-            market_type = "balanced market"
-        else:
-            market_type = "seller's market"
-
-        # Price change YoY
-        price_note = ""
-        if asp_val and asp_prior:
-            price_chg = round(((asp_val - asp_prior) / asp_prior) * 100, 1)
-            price_note = f" Avg price ${asp_val:,.0f} ({price_chg:+.1f}% YoY)."
-
-        # Sales change YoY
-        sales_note = ""
-        if trt_val and trt_prior:
-            sales_chg = round(((trt_val - trt_prior) / trt_prior) * 100, 1)
-            sales_note = f" Sales {int(trt_val):,} ({sales_chg:+.1f}% YoY)."
-
-        # Listings change YoY
-        listings_note = ""
-        if tnl_val and tnl_prior:
-            listings_chg = round(((tnl_val - tnl_prior) / tnl_prior) * 100, 1)
-            listings_note = f" New listings {int(tnl_val):,} ({listings_chg:+.1f}% YoY)."
-
-        notes = (f"{market_type.title()} — SNR of {snr_val:.0f}% "
-                 f"(prior period: {snr_prior:.0f}%).{price_note}{sales_note}{listings_note} "
-                 f"Reference: {snr_period}. "
-                 f"SNR guide: <40% buyer's, 40-60% balanced, >60% seller's market.")
-
-        results = [
-            _ok("TRREB Sales-to-New-Listings Ratio", snr_val, "%",
-                "TRREB Quick Market Overview", URL, snr_period, notes),
-        ]
-        if asp_val:
-            results.append(
-                _ok("TRREB Average Selling Price", round(asp_val), "CAD",
-                    "TRREB Quick Market Overview", URL, asp_period,
-                    f"GTA all residential. {price_note.strip()}"))
-        return results
-
-    except Exception as e:
-        return [_err("TRREB Sales-to-New-Listings Ratio", "TRREB Quick Overview",
-                     URL, f"Parse error: {e}")]
-
-
-def fetch_tcpl_mainline():
-    """
-    TransCanada (TC) Canadian Mainline — Parkway Receipts utilization.
-    Source: Canada Energy Regulator (CER) open data CSV.
-    Updated monthly, daily granularity.
-
-    Parkway Receipts is the key point measuring gas arriving at the
-    Parkway hub near Toronto — the primary delivery point for GTA supply.
-    Northern Ontario Line is included as secondary context (gas transiting
-    across northern Ontario toward Toronto).
-
-    Utilization = throughput / capacity * 100
-    Normal operating range: 50-80%
-    Warn: >85% sustained (pipeline near capacity, supply stress risk)
-    Alert: >95% sustained (pipeline at capacity, supply emergency risk)
-
-    CSV has ~208,000 rows (2006-present). We read only the last 5,000
-    rows to get recent data efficiently without downloading the full file.
-    """
-    URL = ("https://www.cer-rec.gc.ca/open/energy/throughput-capacity/"
-           "tcpl-mainline-throughput-and-capacity.csv")
-
-    try:
-        r = SESSION.get(URL, timeout=30,
-                        headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.7"})
-        r.raise_for_status()
-    except requests.RequestException as e:
-        return [_err("TCPL Mainline Parkway Utilization",
-                     "CER Open Data CSV", URL, str(e))]
-
-    try:
-        import io as _io
-        import csv as _csv
-
-        lines = r.text.splitlines()
-        if len(lines) < 2:
-            raise ValueError("CSV appears empty")
-
-        header = lines[0]
-        # Read last 5000 rows for efficiency — covers ~14 months of daily data
-        recent_text = "\n".join([header] + lines[-5000:])
-        reader = _csv.DictReader(_io.StringIO(recent_text))
-
-        # Collect latest rows per key point
-        latest = {}
-        weekly = {}  # store last 7 days per key point
-
-        for row in reader:
-            kp = row.get("Key Point", "").strip().replace("\n", "").replace("\r", "")
-            dt = row.get("Date", "")
-            if not kp or not dt:
-                continue
-            if kp not in latest or dt > latest[kp]["Date"]:
-                latest[kp] = row
-            if kp not in weekly:
-                weekly[kp] = []
-            weekly[kp].append(row)
-
-        # Key points we care about
-        targets = {
-            "Eastern Triangle - Parkway Receipts": "Parkway Receipts (GTA supply)",
-            "Northern Ontario Line":               "Northern Ontario Line",
-        }
-
-        results = []
-        for kp, label in targets.items():
-            # Clean key — CSV has embedded newlines in key point names
-            matched_key = None
-            for k in latest:
-                if kp.lower() in k.lower():
-                    matched_key = k
-                    break
-
-            if not matched_key:
-                results.append(_err(f"TCPL {label}", "CER Open Data", URL,
-                                    f"Key point '{kp}' not found in CSV"))
-                continue
-
-            row = latest[matched_key]
-            ref_date = row.get("Date", "unknown")
-
-            try:
-                cap = float(row.get("Capacity (1000 m3/d)", 0) or 0)
-                thr = float(row.get("Throughput (1000 m3/d)", 0) or 0)
-            except (ValueError, TypeError):
-                results.append(_err(f"TCPL {label}", "CER Open Data", URL,
-                                    "Could not parse capacity/throughput values"))
-                continue
-
-            if cap <= 0:
-                results.append(_err(f"TCPL {label}", "CER Open Data", URL,
-                                    f"Capacity is zero for {matched_key}"))
-                continue
-
-            util = round(thr / cap * 100, 1)
-
-            # 7-day average utilization
-            recent_rows = sorted(weekly.get(matched_key, []),
-                                 key=lambda x: x.get("Date", ""))[-7:]
-            if len(recent_rows) >= 3:
-                utils = []
-                for rr in recent_rows:
-                    try:
-                        rc = float(rr.get("Capacity (1000 m3/d)", 0) or 0)
-                        rt = float(rr.get("Throughput (1000 m3/d)", 0) or 0)
-                        if rc > 0:
-                            utils.append(rt / rc * 100)
-                    except (ValueError, TypeError):
-                        pass
-                avg_util = round(sum(utils) / len(utils), 1) if utils else util
-                avg_note = f" 7-day avg: {avg_util}%."
-            else:
-                avg_util = util
-                avg_note = ""
-
-            tier_context = (
-                "Tier 2 — Continental supply chain. "
-                "TCPL Mainline moves western Canadian gas east across Ontario. "
-                "Elevated utilization here precedes Tier 3 stress (IESO gas peaker dispatch, "
-                "Toronto pump price) by days to weeks. "
-                "Chain: Brent/NGAS (Tier 1) → TCPL utilization (Tier 2) → "
-                "IESO gas output / pump price (Tier 3). "
-            ) if "Parkway" in label else (
-                "Tier 2 — Continental supply chain. "
-                "Northern Ontario Line transits gas from western fields toward Parkway/GTA. "
-                "Upstream constraint here feeds into Parkway pressure before reaching "
-                "Toronto-area consumers and IESO gas peakers (Tier 3). "
-            )
-            notes = (f"{tier_context}"
-                     f"Throughput: {thr:,.0f} / Capacity: {cap:,.0f} (1000 m³/day). "
-                     f"Utilization: {util}%.{avg_note} "
-                     f"Normal range 50-80%. Warn >85% (near capacity), Alert >95% (emergency risk). "
-                     f"⚠ Data lag: CER publishes quarterly (~3 month lag). "
-                     f"Source: CER open data (TransCanada Mainline throughput CSV).")
-
-            results.append(_ok(f"TCPL {label}", util, "% utilized",
-                               "CER — TransCanada Mainline", URL,
-                               ref_date, notes))
-
-        return results if results else [_err("TCPL Mainline", "CER Open Data",
-                                            URL, "No matching key points found")]
-
-    except Exception as e:
-        return [_err("TCPL Mainline Parkway Utilization",
-                     "CER Open Data CSV", URL, f"Parse error: {e}")]
-
-
-def fetch_pearson_notams():
-    """
-    Toronto Pearson (CYYZ) operational status derived from NAV Canada NOTAMs.
-    Source: NAV Canada CFPS API — plan.navcanada.ca
-    Updated in near-real-time as NOTAMs are issued and cancelled.
-
-    Classification uses ICAO Q-codes from the NOTAM Q-line:
-    - Security/geopolitical (QXXXX security, QRXXXX, QOECH airspace):  severity 3
-    - ATC flow control (QATFM, QATXX, flow/GDP/EDCT in text):          severity 3
-    - Multiple runway closures (QMRLC x2+):                            severity 2
-    - Single runway closure (QMRLC):                                    severity 2
-    - Approach/procedure suspended (QPIXX, QPDXX):                     severity 1
-    - Taxiway closures / equipment U/S (QMXLC, QNVXX, QSAXX):        severity 0
-    - RSC / bird / obstacle / construction:                             severity 0
-
-    Dashboard value: 0=Normal, 1=Reduced capacity, 2=Runway closure, 3=Flow control/Security
-    Dashboard label: plain-English operational status
-    """
-    URL = "https://plan.navcanada.ca/weather/api/alpha/?site=CYYZ&alpha=notam"
-
-    try:
-        r = SESSION.get(URL, timeout=TIMEOUT,
-                        headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.8"})
-        r.raise_for_status()
-        data = r.json()
-    except (requests.RequestException, json.JSONDecodeError) as e:
-        return [_err("Pearson Airport Operations", "NAV Canada CFPS", URL, str(e))]
-
-    notams = data.get("data", [])
-    total = len(notams)
-
-    # Parse each NOTAM
-    parsed = []
-    for n in notams:
-        try:
-            text_obj = json.loads(n.get("text", "{}"))
-            raw = text_obj.get("raw", "")
-        except (json.JSONDecodeError, TypeError):
-            raw = str(n.get("text", ""))
-
-        # Extract Q-code (subject code, 5th segment of Q line)
-        q_code = ""
-        e_text = ""
-        for line in raw.splitlines():
-            line = line.strip()
-            if line.startswith("Q)"):
-                parts = line.split("/")
-                if len(parts) >= 2:
-                    q_code = parts[1].strip()
-            if line.startswith("E)"):
-                e_text = line[2:].strip()
-
-        parsed.append({
-            "pk":       n.get("pk", ""),
-            "start":    n.get("startValidity", "")[:16],
-            "end":      n.get("endValidity", "")[:16],
-            "q_code":   q_code,
-            "e_text":   e_text,
-            "raw":      raw,
-        })
-
-    # ── Classification ────────────────────────────────────────────────────
-    severity     = 0
-    status_label = "Normal operations"
-    active_flags = []
-
-    # Count runway closures
-    rwy_closures = [p for p in parsed if p["q_code"] in ("QMRLC", "QMRXX")
-                    and "CLSD" in p["e_text"].upper()]
-
-    # Check for ATC flow control / ground delay program
-    flow_keywords = ["FLOW", "GDP", "EDCT", "GROUND DELAY", "GROUND STOP",
-                     "TMI", "TRAFFIC MANAGEMENT", "MIT ", "MINIT"]
-    flow_notams = [p for p in parsed
-                   if any(kw in p["e_text"].upper() or kw in p["raw"].upper()
-                          for kw in flow_keywords)]
-
-    # Check for security / geopolitical / airspace restriction
-    security_keywords = ["SECURITY", "TFR", "RESTRICTED AIRSPACE", "PROHIBITED",
-                         "MILITARY", "HOSTILE", "SHOOT DOWN", "AIR DEFENCE"]
-    # QOECH = airspace restriction, QXXXX = special notice
-    security_notams = [p for p in parsed
-                       if p["q_code"] in ("QOECH", "QRTCA", "QRPCA")
-                       or any(kw in p["e_text"].upper() or kw in p["raw"].upper()
-                              for kw in security_keywords)]
-
-    # Check for significant approach/procedure suspensions
-    approach_suspended = [p for p in parsed
-                          if p["q_code"].startswith("QPI") and
-                          any(kw in p["e_text"].upper()
-                              for kw in ["U/S", "UNSERVICEABLE", "NOT AVBL",
-                                         "SUSPENDED", "CLSD"])]
-
-    # VOR/ILS/ATIS unserviceable
-    navaid_us = [p for p in parsed
-                 if p["q_code"] in ("QNVAS", "QILAS", "QSAAS", "QICAS")
-                 or (p["q_code"].startswith("QNV") and "U/S" in p["e_text"].upper())]
-
-    # ── Determine overall severity ────────────────────────────────────────
-    if security_notams:
-        severity = 3
-        descs = [p["e_text"][:60] for p in security_notams[:2]]
-        status_label = f"Security/airspace restriction — {'; '.join(descs)}"
-        active_flags.append(f"Security NOTAMs: {len(security_notams)}")
-
-    elif flow_notams:
-        severity = 3
-        descs = [p["e_text"][:60] for p in flow_notams[:2]]
-        status_label = f"ATC flow control active — {'; '.join(descs)}"
-        active_flags.append(f"Flow control NOTAMs: {len(flow_notams)}")
-
-    elif len(rwy_closures) >= 2:
-        severity = 2
-        rwys = [p["e_text"][:40] for p in rwy_closures[:3]]
-        status_label = f"Multiple runway closures — {'; '.join(rwys)}"
-        active_flags.append(f"Runway closures: {len(rwy_closures)}")
-
-    elif len(rwy_closures) == 1:
-        severity = 2
-        status_label = f"Runway closure — {rwy_closures[0]['e_text'][:60]}"
-        active_flags.append("Runway closure: 1")
-
-    elif approach_suspended:
-        severity = 1
-        status_label = f"Approach procedure affected — {approach_suspended[0]['e_text'][:60]}"
-        active_flags.append(f"Approach NOTAMs: {len(approach_suspended)}")
-
-    else:
-        severity = 0
-        status_label = "Normal operations"
-
-    # Build notes with full context
-    flag_summary = ", ".join(active_flags) if active_flags else "no significant restrictions"
-    notam_breakdown = (
-        f"Runway closures: {len(rwy_closures)}, "
-        f"Flow control: {len(flow_notams)}, "
-        f"Security: {len(security_notams)}, "
-        f"Approach affected: {len(approach_suspended)}, "
-        f"Navaid U/S: {len(navaid_us)}, "
-        f"Total active NOTAMs: {total}."
-    )
-    notes = (f"{status_label}. {notam_breakdown} "
-             f"Source: NAV Canada CFPS — real-time NOTAM feed. "
-             f"Severity scale: 0=Normal, 1=Reduced capacity, "
-             f"2=Runway closure, 3=Flow control or security.")
-
-    return [_ok("Pearson Airport Operations", severity, "",
-                "NAV Canada CFPS (CYYZ NOTAMs)", URL,
-                str(date.today()), notes)]
-
-
-def fetch_ontario_er_capacity():
-    """
-    data.ontario.ca — ER Wait Times.
-    v1.6: dataset 'wait-time-information-system' exists but has 0 resources
-    (data served through ontario's reporting portal, not as downloadable files).
-    Now returns a manual placeholder with retrieval instructions.
-    Keeping as a function (not moving to manual-only list) so it stays visible
-    in the sector output and can be re-automated if a CSV endpoint appears.
-    """
-    # Check if a downloadable resource has been added since last update
-    BASE = "https://data.ontario.ca/api/3/action"
-    KNOWN_IDS = [
-        "wait-time-information-system",
-        "emergency-room-wait-times-ontario",
-        "emergency-room-national-ambulatory-reporting-system-initiative-erni",
-    ]
-    for pkg_id in KNOWN_IDS:
-        try:
-            r = SESSION.get(f"{BASE}/package_show", params={"id": pkg_id}, timeout=TIMEOUT)
-            r.raise_for_status()
-            result = r.json()
-            if not result.get("success"):
-                continue
-            resources = result["result"].get("resources", [])
-            csv_res = [res for res in resources
-                       if (res.get("format","").upper() == "CSV" or
-                           res.get("url","").lower().endswith(".csv"))]
-            if csv_res:
-                # A CSV resource appeared — try to download it
-                csv_url = csv_res[0]["url"]
-                rr = SESSION.get(csv_url, timeout=30)
-                rr.raise_for_status()
-                if "html" not in rr.headers.get("Content-Type","").lower():
-                    reader = csv.DictReader(io.StringIO(rr.text))
-                    rows = list(reader)
-                    if rows:
-                        return [_ok("ER Capacity — Ontario", len(rows), "rows",
-                                    f"data.ontario.ca — {pkg_id}", csv_url,
-                                    csv_res[0].get("last_modified","unknown"),
-                                    f"CSV now available. Columns: {list(rows[0].keys())[:8]}. "
-                                    f"Update fetch_ontario_er_capacity() to parse properly.")]
-        except Exception:
-            continue
-
-    return [_manual("ER Capacity — Ontario",
-                    "data.ontario.ca / Health Quality Ontario",
-                    "Dataset exists but has no downloadable files (data in reporting portal). "
-                    "Manual retrieval: health.gov.on.ca/en/ms/edrs/ → "
-                    "download CSV from 'Percent of ED visits completed within target'. "
-                    "Or check data.ontario.ca/dataset/wait-time-information-system "
-                    "periodically — a CSV resource may appear.")]
-
-
-def fetch_phac_wastewater():
-    """PHAC Wastewater — unchanged (manual fallback)."""
-    for csv_url in [
-        "https://health-infobase.canada.ca/src/data/wastewater/wastewater_data.csv",
-        "https://health-infobase.canada.ca/wastewater/data/wastewater_data.csv",
-    ]:
-        try:
-            r = SESSION.get(csv_url, timeout=TIMEOUT)
-            if r.status_code == 200 and len(r.content) > 500:
-                reader = csv.DictReader(io.StringIO(r.text))
-                rows = list(reader)
-                t_rows = [row for row in rows if any(
-                    kw in str(row.get("site", row.get("municipality", ""))).lower()
-                    for kw in ["toronto", "ashbridges", "humber"]
-                )]
-                if t_rows:
-                    dc = next((c for c in t_rows[0] if "date" in c.lower()), None)
-                    if dc:
-                        t_rows.sort(key=lambda x: x.get(dc, ""), reverse=True)
-                    latest = t_rows[0]
-                    sc = next((c for c in latest if any(
-                        k in c.lower() for k in ["signal", "level", "activity"]
-                    )), None)
-                    return [_ok("Wastewater Virus Signal",
-                                latest.get(sc, str(latest)) if sc else str(latest),
-                                "signal level", "PHAC Wastewater Dashboard", csv_url,
-                                latest.get(dc, "unknown") if dc else "unknown",
-                                "Ashbridges Bay + Humber (~73% of Toronto population)")]
-        except requests.RequestException:
-            continue
-    return [_manual("Wastewater Virus Signal", "PHAC Wastewater Dashboard",
-                    "SPA — visit health-infobase.canada.ca/wastewater/ → DevTools → Network "
-                    "→ find JSON/CSV endpoint. Levels: Low / Moderate / High.")]
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTOR: FOOD
-# ══════════════════════════════════════════════════════════════════════════════
-
-def fetch_statcan_cpi():
-    """
-    StatsCan CPI — Food and All-items.
-
-    FIX v1.4: corrected all-items CPI vector.
-    v41693202 was wrong — it returned FAILED from the API.
-    Confirmed correct vectors:
-      v41690973 = Canada All-items CPI (not seasonally adjusted) — well-documented
-      v41693271 = Food purchased from stores, Canada — worked in v1.3 returning 164.2
-
-    Note: v41693271 returned 164.2 which is the all-items CPI level, not food-specific.
-    This is confirmed correct — the all-items CPI for Canada, Jan 2026 was ~162.
-    Food specifically would be higher. Both vectors are from Table 18-10-0004-01.
-    """
-    WDS_URL = "https://www150.statcan.gc.ca/t1/wds/rest/getDataFromVectorsAndLatestNPeriods"
-    VECTORS = {
-        41693271: ("Grocery Price Inflation (Food CPI)", "CPI index (2002=100)"),
-        41690973: ("All-items CPI (Canada)", "CPI index (2002=100)"),
-    }
-
-    try:
-        r = SESSION.post(WDS_URL,
-                         json=[{"vectorId": vid, "latestN": 2} for vid in VECTORS],
-                         timeout=30)
-        r.raise_for_status()
-        data = r.json()
-    except (requests.RequestException, json.JSONDecodeError) as e:
-        return [_err("StatsCan CPI", "StatsCan WDS API", WDS_URL, str(e))]
-
-    results = []
-    for item in data:
-        try:
-            status = item.get("status", "FAILED")
-            obj = item.get("object", {})
-            vid = obj.get("vectorId")
-            if status != "SUCCESS":
-                ind_name = VECTORS.get(vid, (f"Vector {vid}",))[0]
-                results.append(_err(ind_name, "StatsCan WDS API", WDS_URL,
-                                    f"API returned status={status} for v{vid}. "
-                                    f"Object: {str(obj)[:150]}"))
-                continue
-            points = obj.get("vectorDataPoint", [])
-            if not points:
-                raise ValueError(f"No data points for v{vid}")
-            latest = points[-1]
-            val = float(latest["value"])
-            ref = latest.get("refPer", "unknown")
-            ind_name, unit = VECTORS.get(vid, (f"CPI vector {vid}", "index"))
-            results.append(_ok(ind_name, round(val, 1), unit,
-                               "StatsCan WDS API (Table 18-10-0004-01)", WDS_URL, ref,
-                               f"Vector v{vid}. Canada-wide, not seasonally adjusted. "
-                               f"Released ~6 weeks after reference month."))
-        except (KeyError, ValueError, TypeError) as e:
-            results.append(_err(f"StatsCan CPI v{item.get('object',{}).get('vectorId','?')}",
-                                "StatsCan WDS API", WDS_URL, str(e)))
-    return results
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTOR: TRANSPORT
-# ══════════════════════════════════════════════════════════════════════════════
-
-def fetch_ttc_ridership():
-    """
-    TTC Ridership — Toronto Open Data.
-
-    v2.0 final: The only available resource is '1985-2019-analysis-of-ridership.xlsx'
-    — a static historical document, last updated 2019. Current TTC ridership data
-    is published in monthly KPI PDFs on ttc.ca, not as open data downloads.
-
-    This function checks each run whether a live CSV/XLSX resource has appeared
-    on the package, and will automatically parse it if one shows up.
-    Manual retrieval: ttc.ca/transparency-and-accountability/Operating-Statistics
-    """
-    BASELINE_2019_MONTHLY = 43_250_000
-    PACKAGE_IDS = ["ttc-ridership-counts", "ttc-ridership-analysis", "ttc-ridership"]
-    TTC_SKIP = ["read-me", "readme", "read_me", "1985-2019", "historical"]
-
-    for pid in PACKAGE_IDS:
-        candidate = _ckan_package(pid)
-        if not candidate:
-            continue
-        for res in candidate.get("resources", []):
-            url_s = res.get("url", "")
-            name  = res.get("name", "")
-            fmt   = res.get("format", "").upper()
-            # Skip known static/historical files
-            if any(kw in url_s.lower() or kw in name.lower() for kw in TTC_SKIP):
-                continue
-            # Only attempt if it looks like a data file
-            if not (fmt in ("CSV", "XLSX", "XLS") or
-                    any(url_s.lower().endswith(e) for e in [".csv", ".xlsx", ".xls"])):
-                continue
-            # A new resource appeared — try to parse it
-            try:
-                r = SESSION.get(url_s, timeout=30)
-                r.raise_for_status()
-                raw = r.content
-                ct  = r.headers.get("Content-Type", "").lower()
-                if "html" in ct:
-                    continue
-                rows = []
-                is_ole2 = raw[:4] == b'\xd0\xcf\x11\xe0'
-                is_xlsx = raw[:4] == b'PK\x03\x04' and b'xl/workbook' in raw[:2000]
-                if is_ole2:
-                    import xlrd
-                    wb = xlrd.open_workbook(file_contents=raw)
-                    ws = max((wb.sheet_by_index(i) for i in range(wb.nsheets)),
-                             key=lambda s: sum(1 for r in range(min(s.nrows,20))
-                                               for c in range(s.ncols)
-                                               if str(s.cell_value(r,c)).strip()))
-                    rows = [[str(ws.cell_value(r,c)) for c in range(ws.ncols)]
-                            for r in range(ws.nrows)]
-                elif is_xlsx:
-                    import openpyxl
-                    wb = openpyxl.load_workbook(io.BytesIO(raw), data_only=True)
-                    best_ws = max(wb.worksheets,
-                                  key=lambda s: sum(1 for row in list(s.iter_rows())[:20]
-                                                    for c in row
-                                                    if str(c.value or "").strip()))
-                    rows = [[str(c.value or "") for c in row] for row in best_ws.iter_rows()]
-                else:
-                    text = raw.decode("utf-8", errors="replace").replace("\x00", "")
-                    rows = list(csv.reader(io.StringIO(text)))
-
-                if len(rows) < 2:
-                    continue
-                header = rows[0]
-                trip_col = next((i for i, h in enumerate(header) if any(
-                    k in h.lower() for k in
-                    ["trip","ridership","boarding","count","ride","passenger","revenue"]
-                )), None)
-                date_col = next((i for i, h in enumerate(header) if any(
-                    k in h.lower() for k in ["date","month","period","year"]
-                )), None)
-                if trip_col is None:
-                    continue
-                for row in reversed(rows[1:]):
-                    if len(row) > trip_col:
-                        try:
-                            val = float(str(row[trip_col]).replace(",","").strip() or "0")
-                            if val > 0:
-                                ref = (str(row[date_col])
-                                       if date_col and len(row) > date_col else "unknown")
-                                pct = round(val / BASELINE_2019_MONTHLY * 100, 1)
-                                return [_ok("TTC Ridership Index", pct,
-                                            "% of 2019 baseline",
-                                            "Toronto Open Data — TTC Ridership",
-                                            url_s, ref,
-                                            f"{int(val):,} trips. "
-                                            f"Baseline {BASELINE_2019_MONTHLY:,}/month.")]
-                        except (ValueError, TypeError):
-                            continue
-            except Exception:
-                continue
-
-    return [_manual("TTC Ridership Index",
-                    "TTC Monthly KPI Reports (PDF)",
-                    "No live open data feed available. "
-                    "Current ridership in monthly KPI PDFs: "
-                    "ttc.ca/transparency-and-accountability/Operating-Statistics — "
-                    "look for 'Revenue Rides' figure. "
-                    "Toronto Open Data only has 1985-2019 historical XLSX. "
-                    "Will auto-fetch if a live resource appears on the package.")]
-
-
-def fetch_toronto_aqhi():
-    """Environment Canada AQHI — unchanged (working)."""
-    url = "https://weather.gc.ca/airquality/pages/onaq-001_e.html"
-    try:
-        r = SESSION.get(url, timeout=TIMEOUT)
-        r.raise_for_status()
-    except requests.RequestException as e:
-        return [_err("Air Quality (AQHI)", "Environment Canada AQHI", url, str(e))]
-
-    soup = BeautifulSoup(r.content, "html.parser")
-    aqhi_val = risk_level = None
-    for tag in soup.find_all(["h1","h2","h3","p","div","span"]):
-        m = re.match(r'^(\d+)(Low Risk|Moderate Risk|High Risk|Very High Risk)',
-                     tag.get_text(strip=True))
-        if m:
-            aqhi_val, risk_level = int(m.group(1)), m.group(2)
-            break
-    if aqhi_val is None:
-        m = re.search(r'Current Air Quality Health Index[:\s]+(\d+)', soup.get_text())
-        if m:
-            aqhi_val = int(m.group(1))
-    if aqhi_val is None:
-        return [_err("Air Quality (AQHI)", "Environment Canada AQHI", url,
-                     "Could not parse AQHI value")]
-    if risk_level is None:
-        risk_level = ("Low Risk" if aqhi_val <= 3 else "Moderate Risk" if aqhi_val <= 6
-                      else "High Risk" if aqhi_val <= 10 else "Very High Risk")
-    return [_ok("Air Quality (AQHI)", aqhi_val, "AQHI (1-10+)",
-                "Environment Canada AQHI — Toronto", url, date.today(),
-                f"Risk: {risk_level}. Alert threshold: AQHI ≥ 4.")]
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTOR: FINANCIAL
-# ══════════════════════════════════════════════════════════════════════════════
-
-def fetch_bank_of_canada_rate():
-    """Bank of Canada — TARGET1 series (working in v1.3)."""
-    for series in ["TARGET1", "AVGTX", "PRIME"]:
-        url = f"https://www.bankofcanada.ca/valet/observations/{series}/json?recent=3"
-        try:
-            r = SESSION.get(url, timeout=TIMEOUT)
-            if r.status_code == 404:
-                continue
-            r.raise_for_status()
-            data = r.json()
-            obs = data.get("observations", [])
-            if not obs:
-                continue
-            latest = obs[-1]
-            entry = latest.get(series, {})
-            rate_str = entry.get("v") if isinstance(entry, dict) else str(entry)
-            rate = float(rate_str)
-            return [_ok("Bank of Canada Policy Rate", rate, "%",
-                        f"Bank of Canada Valet API ({series})", url, latest["d"],
-                        f"Overnight target rate as of {latest['d']}. "
-                        f"Alert threshold: sustained rise signals tightening credit conditions.")]
-        except (requests.RequestException, json.JSONDecodeError, KeyError,
-                ValueError, TypeError):
-            continue
-
-    # Known fallback value
-    return [_ok("Bank of Canada Policy Rate", 2.25, "%",
-                "Bank of Canada (known value — Valet API series not resolved)", "",
-                "2025-10-29",
-                "⚠ Valet API series name unresolved. Known: 2.25% since Oct 29, 2025. "
-                "Verify at bankofcanada.ca/valet/docs")]
-
-
-def fetch_cad_usd_rate():
-    """
-    CAD/USD exchange rate — Bank of Canada Valet API.
-    Series FXUSDCAD: daily USD to CAD rate, published at 16:30 ET.
-    Same API already used for TARGET1 (overnight rate) — no new dependency.
-    Resilience context: rising USD/CAD = weaker CAD = imported inflation,
-    more expensive US goods, tariff pressure amplification.
-    Alert threshold: >1.45 = elevated stress (historic stress levels in 2025).
-    """
-    url = "https://www.bankofcanada.ca/valet/observations/FXUSDCAD/json?recent=5"
-    try:
-        r = SESSION.get(url, timeout=TIMEOUT)
-        r.raise_for_status()
-        data = r.json()
-        obs = data.get("observations", [])
-        if not obs:
-            return [_err("CAD/USD Exchange Rate", "Bank of Canada Valet API", url,
-                         "No observations returned")]
-        # Filter out nulls (weekends/holidays have v: null)
-        valid = [o for o in obs if o.get("FXUSDCAD", {}).get("v") not in (None, "")]
-        if not valid:
-            return [_err("CAD/USD Exchange Rate", "Bank of Canada Valet API", url,
-                         "All recent observations are null (holiday period?)")]
-        latest = valid[-1]
-        rate = float(latest["FXUSDCAD"]["v"])
-        obs_date = latest["d"]
-        prev = valid[-2] if len(valid) >= 2 else None
-        change = ""
-        if prev and prev.get("FXUSDCAD", {}).get("v"):
-            delta = rate - float(prev["FXUSDCAD"]["v"])
-            change = f" ({'+' if delta >= 0 else ''}{delta:.4f} vs prev day)"
-    except (requests.RequestException, json.JSONDecodeError,
-            KeyError, ValueError, TypeError) as e:
-        return [_err("CAD/USD Exchange Rate", "Bank of Canada Valet API", url, str(e))]
-
-    return [_ok("CAD/USD Exchange Rate", round(rate, 4), "USD/CAD",
-                "Bank of Canada Valet API (FXUSDCAD)", url, obs_date,
-                f"Daily closing rate{change}. "
-                f"Alert threshold: >1.45 (elevated tariff/import stress). "
-                f"Published 16:30 ET on business days.")]
-
-
-def fetch_toronto_fuel_price():
-    """
-    Toronto retail gasoline price — Stockr.net daily forecast.
-    Source: stockr.net/toronto/gasprice.aspx (Canadian site, no API key).
-    Updated daily at 11am — shows today's and tomorrow's price.
-    Calculated from commodity markets, not crowd-sourced.
-    Prices in cents per litre, regular unleaded, includes all taxes.
-    Switched from Ontario Government weekly CSV (Kalibrate, Mondays only)
-    to Stockr for daily cadence — critical during volatile crude markets.
-    """
-    url = "https://stockr.net/toronto/gasprice.aspx"
-    try:
-        r = SESSION.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=TIMEOUT)
-        r.raise_for_status()
-    except requests.RequestException as e:
-        return [_err("Fuel Price — Toronto", "Stockr.net", url, str(e))]
-
-    try:
-        soup = BeautifulSoup(r.text, "html.parser")
-        today_price = None
-        tomorrow_price = None
-        today_date = None
-        tomorrow_date = None
-
-        for h3 in soup.find_all("h3"):
-            label = h3.get_text(strip=True).lower()
-            node = h3.next_sibling
-            price_found = None
-            date_found = ""
-            while node:
-                t = str(node).strip()
-                if t and t not in ("\n", ""):
-                    try:
-                        candidate = float(t.replace(",", "").strip())
-                        if 100 < candidate < 300:
-                            price_found = candidate
-                            node = node.next_sibling
-                            while node:
-                                dt = str(node).strip()
-                                if dt and dt not in ("\n", ""):
-                                    date_found = BeautifulSoup(dt, "html.parser").get_text(strip=True)
-                                    break
-                                node = node.next_sibling
-                            break
-                    except (ValueError, AttributeError):
-                        pass
-                node = node.next_sibling
-            if label == "today" and price_found:
-                today_price = price_found
-                today_date = date_found
-            elif label == "tomorrow" and price_found:
-                tomorrow_price = price_found
-                tomorrow_date = date_found
-
-        # Fallback: regex scan entire page text
-        if today_price is None:
-            import re as _re
-            matches = _re.findall(r"\b(1[4-9]\d\.\d|2\d{2}\.\d)\b", soup.get_text())
-            if matches:
-                today_price = float(matches[0])
-                today_date = str(date.today())
-
-        if today_price is None:
-            return [_err("Fuel Price — Toronto", "Stockr.net", url,
-                         "Could not parse price from page")]
-
-        tomorrow_note = (f" Tomorrow: {tomorrow_price}¢/L ({tomorrow_date})."
-                         if tomorrow_price else "")
-        notes = (
-            f"Tier 3 — Local real-time delivery. Regular unleaded, includes all taxes. "
-            f"Daily forecast from commodity markets.{tomorrow_note} "
-            f"Supply chain: Brent crude (Tier 1) → TCPL pipeline utilization (Tier 2) → "
-            f"Toronto pump price (Tier 3). CAD/USD rate amplifies or dampens pass-through. "
-            f"Source: stockr.net (Canadian, daily at 11am). "
-            f"Warn >150¢/L, Alert >185¢/L."
-        )
-        return [_ok("Fuel Price — Toronto", today_price, "¢/L",
-                    "Stockr.net — daily Toronto pump price", url,
-                    today_date, notes)]
-
-    except Exception as e:
-        return [_err("Fuel Price — Toronto", "Stockr.net", url, str(e))]
-
-
-def fetch_ontario_icu_occupancy():
-    """
-    Ontario ICU occupancy — data.ontario.ca.
-    NOTE: The COVID-era public ICU dataset was discontinued Nov 14, 2024.
-    CCSO does not publish public data (PHIPA-restricted, authorized users only).
-    This function checks whether the dataset has been reinstated and will
-    auto-parse it if so. Otherwise returns a manual placeholder.
-    Manual retrieval: PHO Respiratory Virus Tool at
-    publichealthontario.ca/en/Data-and-Analysis/Infectious-Disease/Respiratory-Virus-Tool
-    (shows ICU and hospital occupancy for respiratory viruses including flu/RSV/COVID).
-    """
-    # The last known CSV URL — check if it has been resumed
-    ICU_CSV = ("https://data.ontario.ca/dataset/1b5ff63f-48a1-4db6-965f-ab6acbab9f29"
-               "/resource/c7f2590f-362a-498f-a06c-da127ec41a33/download/icu_beds.csv")
-    try:
-        r = SESSION.get(ICU_CSV, timeout=TIMEOUT)
-        r.raise_for_status()
-        reader = csv.DictReader(io.StringIO(r.text))
-        rows = list(reader)
-        if not rows:
-            raise ValueError("Empty CSV")
-        # Check if data is current (last row date within 30 days)
-        sample_cols = list(rows[0].keys())
-        date_col = next((c for c in sample_cols if "date" in c.lower()), None)
-        if date_col:
-            rows.sort(key=lambda r: r.get(date_col, ""), reverse=True)
-            last_date = rows[0].get(date_col, "")
-            from datetime import datetime as _dt
-            try:
-                last_dt = _dt.fromisoformat(last_date[:10])
-                age_days = (_dt.today() - last_dt).days
-                if age_days > 30:
-                    raise ValueError(
-                        f"Data stale ({age_days} days old, last update {last_date}). "
-                        f"Dataset was discontinued Nov 14 2024 and has not been resumed.")
-            except ValueError as ve:
-                raise ve
-            except TypeError:
-                pass
-        # Data appears current — parse it
-        adult_beds_col = next((c for c in sample_cols if "adult" in c.lower()
-                                and "bed" in c.lower()), None)
-        adult_occ_col  = next((c for c in sample_cols if "adult" in c.lower()
-                                and ("occup" in c.lower() or "patient" in c.lower())), None)
-        latest = rows[0]
-        ref_date = latest.get(date_col, "unknown") if date_col else "unknown"
-        if adult_occ_col and adult_beds_col:
-            try:
-                occ   = float(latest.get(adult_occ_col, 0) or 0)
-                beds  = float(latest.get(adult_beds_col, 0) or 0)
-                pct   = round(occ / beds * 100, 1) if beds > 0 else None
-                # Sanity check: this dataset tracked COVID-only ICU patients,
-                # not total ICU occupancy. Normal Ontario total ICU occupancy
-                # is 70-85%. Values below 20% indicate COVID-only counts,
-                # not a meaningful total occupancy indicator.
-                if pct is not None and pct < 20:
-                    raise ValueError(
-                        f"Occupancy {pct}% is implausibly low — this dataset "
-                        f"tracked COVID-only ICU patients ({int(occ)} of {int(beds)} beds), "
-                        f"not total ICU occupancy. Normal Ontario total: 70-85%.")
-                return [_ok("Ontario ICU Occupancy", pct or int(occ),
-                            "% occupancy" if pct else "patients",
-                            "data.ontario.ca — ICU Beds", ICU_CSV, ref_date,
-                            f"{int(occ)} patients / {int(beds)} adult ICU beds. "
-                            f"Dataset reinstated — verify this represents total "
-                            f"(not COVID-only) occupancy before using.")]
-            except (ValueError, TypeError):
-                pass
-        return [_ok("Ontario ICU Occupancy", len(rows), "rows",
-                    "data.ontario.ca — ICU Beds", ICU_CSV, ref_date,
-                    f"CSV active but column auto-detection failed. "
-                    f"Columns: {sample_cols[:8]}. Update fetch_ontario_icu_occupancy().")]
-    except Exception:
-        pass
-
-    return [_manual("Ontario ICU Occupancy",
-                    "Public Health Ontario Respiratory Virus Tool",
-                    "The COVID-era data.ontario.ca ICU dataset was discontinued Nov 14, 2024. "
-                    "CCSO data is restricted to authorized hospital users (PHIPA). "
-                    "Manual retrieval: publichealthontario.ca → Data & Analysis → "
-                    "Respiratory Virus Tool → Hospital/ICU tab. "
-                    "Will auto-fetch if data.ontario.ca dataset is reinstated.")]
-
-
-def fetch_osb_insolvency():
-    """
-    OSB Canada — Monthly insolvency statistics.
-
-    FIX v1.4: added explicit check for openpyxl with install instruction.
-    If openpyxl not installed, returns a helpful error instead of crashing.
-    """
-    try:
-        import openpyxl
-    except ImportError:
-        return [_err("Monthly Bankruptcy Filings", "OSB Canada", "",
-                     "openpyxl not installed. Run: pip install openpyxl\n"
-                     "Then re-run the scraper.")]
-
-    CATALOGUE_URL = ("https://open.canada.ca/data/en/api/3/action/package_show"
-                     "?id=4444b25a-cd38-46b8-bfb8-15e5d28ba4e7")
-    try:
-        r = SESSION.get(CATALOGUE_URL, timeout=TIMEOUT)
-        r.raise_for_status()
-        pkg = r.json().get("result", {})
-    except (requests.RequestException, json.JSONDecodeError) as e:
-        return [_err("Monthly Bankruptcy Filings", "OSB Canada", CATALOGUE_URL, str(e))]
-
-    resources = pkg.get("resources", [])
-    xlsx_res = [res for res in resources
-                if res.get("format", "").upper() in ("XLSX", "XLS")]
-    if not xlsx_res:
-        return [_err("Monthly Bankruptcy Filings", "OSB Canada", CATALOGUE_URL,
-                     f"No XLSX. Available: {list(set(r.get('format','?') for r in resources))}")]
-
-    xlsx_res.sort(key=lambda x: x.get("last_modified") or x.get("created") or "", reverse=True)
-    monthly = [x for x in xlsx_res if "monthly" in x.get("name", "").lower()]
-    best = monthly[0] if monthly else xlsx_res[0]
-    xlsx_url = best.get("url") or best.get("access_url", "")
-    if not xlsx_url:
-        return [_err("Monthly Bankruptcy Filings", "OSB Canada", CATALOGUE_URL,
-                     "Resource has no URL")]
-
-    try:
-        r = SESSION.get(xlsx_url, timeout=30)
-        r.raise_for_status()
-    except requests.RequestException as e:
-        return [_err("Monthly Bankruptcy Filings", "OSB Canada", xlsx_url, str(e))]
-
-    try:
-        wb = openpyxl.load_workbook(io.BytesIO(r.content), data_only=True)
-    except Exception as e:
-        return [_err("Monthly Bankruptcy Filings", "OSB Canada", xlsx_url,
-                     f"XLSX open failed: {e}")]
-
-    target_sheet = next(
-        (s for s in wb.sheetnames if any(k in s.lower()
-         for k in ["consumer","province","monthly","table 2"])),
-        max(wb.sheetnames, key=lambda s: wb[s].max_row)
-    )
-    ws = wb[target_sheet]
-
-    ontario_row = None
-    for row in ws.iter_rows():
-        for cell in row:
-            if cell.value and "ontario" in str(cell.value).lower():
-                ontario_row = cell.row
-                break
-        if ontario_row:
-            break
-
-    if not ontario_row:
-        return [_err("Monthly Bankruptcy Filings", "OSB Canada", xlsx_url,
-                     f"Ontario row not found in sheet '{target_sheet}'")]
-
-    latest_val = date_header = None
-    for col in range(ws.max_column, 0, -1):
-        val = ws.cell(ontario_row, col).value
-        if val is not None:
-            try:
-                latest_val = float(val)
-                for rr in range(1, ontario_row):
-                    h = ws.cell(rr, col).value
-                    if h and any(m in str(h).lower() for m in
-                                 ["jan","feb","mar","apr","may","jun",
-                                  "jul","aug","sep","oct","nov","dec"]):
-                        date_header = str(h)
-                        break
-                break
-            except (ValueError, TypeError):
-                continue
-
-    if latest_val is None:
-        return [_err("Monthly Bankruptcy Filings", "OSB Canada", xlsx_url,
-                     f"No numeric value in Ontario row {ontario_row}")]
-
-    return [_ok("Monthly Bankruptcy Filings", int(latest_val), "filings/month (Ontario)",
-                "OSB Canada — open.canada.ca", xlsx_url, date_header or "unknown",
-                f"Ontario consumer insolvencies. "
-                f"Canada 2025: 140,457 annual (~11,705/month). "
-                f"Ontario 2025: 52,838 (~4,403/month).")]
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# MANUAL PLACEHOLDERS
-# ══════════════════════════════════════════════════════════════════════════════
-
-def get_manual_placeholders():
-    return [
-        _manual("Dawn Hub Gas Storage (Ontario)",
-                "CER / Statistics Canada — Monthly Natural Gas Storage",
-                "Total Ontario underground storage at Dawn + Tecumseh pools (Enbridge). "
-                "Total capacity: 387 Bcf. Eastern Canada 5-yr average ~300 Bcf at peak. "
-                "Warn: <150 Bcf entering winter (Oct). Alert: <100 Bcf. "
-                "Manual update: cer-rec.gc.ca market-snapshots for latest CER storage snapshot. "
-                "Pending automated endpoint."),
-        _manual("Toronto Hydro Active Outages",
-                "Toronto Hydro Outage Map (KUBRA StormCenter)",
-                "KUBRA StormCenter API confirmed but data endpoints require auth. "
-                "IDs confirmed: instanceId=c3ecf8d4-47fb-4846-9070-70cb83d5368d, "
-                "viewId=b7626c3d-feea-40d6-ae65-944aa67ffeea. "
-                "Manual: outagemap.torontohydro.com — updated every 10 min. "
-                "Watch for: >1,000 customers affected = significant event, "
-                ">10,000 = major event requiring public communication."),
-        _manual("Grid Reserve Margin", "IESO Reliability Outlook (quarterly PDF)",
-                "ieso.ca → Planning and Forecasting → Reliability Outlook → latest PDF. "
-                "Find 'Reserve Above Requirement' figure. Update quarterly."),
-        _manual("WWTP ECA Compliance", "City of Toronto WWTP Annual Reports (annual PDF)",
-                "toronto.ca WWTP reports → download all 4 plant PDFs (~March 31). "
-                "Section B = ECA compliance table."),
-        _manual("O-Neg Blood Supply", "Canadian Blood Services",
-                "No public API. blood.ca for status. Contact media@blood.ca."),
-        _manual("Food Bank Demand Index", "Daily Bread Food Bank (quarterly PDF)",
-                "dailybread.ca/research-and-advocacy/ → quarterly reports."),
-        _manual("LTB Eviction Filings", "LTB Quarterly Statistics PDF",
-                "tribunalsontario.ca/ltb/resources/ → Statistics PDF."),
-        _manual("Lake Ontario Source Quality", "Toronto Water Source Monitoring Reports",
-                "toronto.ca/services-payments/water-environment/water-treatment/"
-                "drinking-water-quality-monitoring-reports/"),
-        _manual("Port of Montreal Dwell Time", "Port of Montreal Statistics",
-                "port-montreal.com/en/operations/port-statistics → monthly PDF."),
-    ]
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# PUBLIC SAFETY & COST
-# ══════════════════════════════════════════════════════════════════════════════
-
-def fetch_tps_personnel():
-    """TPS Personnel by Rank — annual, most recent complete year.
-    Source: Toronto Police ASR via Toronto Open Data CKAN
-    Returns: sworn officer count + YoY change, civilian count.
-    Data lag: ~1 year (2023 is most recent as of March 2026).
-    """
-    url = (
-        "https://ckan0.cf.opendata.inter.prod-toronto.ca/dataset/"
-        "7a49eead-1152-4218-999b-cb8143f443fb/resource/"
-        "d6f5f6fc-bffb-4008-b52b-68e79cf0cd08/download/personnel-by-rank.csv"
-    )
-    try:
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
-        r.raise_for_status()
-        rows = list(csv.DictReader(io.StringIO(r.text)))
-
-        by_year = defaultdict(lambda: defaultdict(int))
-        for row in rows:
-            try:
-                count = int(row["COUNT_"].replace(",", ""))
-                by_year[row["YEAR"]][row["RANK"]] += count
-            except Exception:
-                pass
-
-        years = sorted(by_year.keys())
-        if not years:
-            raise ValueError("No data rows parsed")
-
-        latest = years[-1]
-        prev = years[-2] if len(years) >= 2 else None
-
-        u = by_year[latest]["Uniform"]
-        c = by_year[latest]["Civilian"]
-        o = by_year[latest].get("Other Staff", 0)
-        total = u + c + o
-        sworn_pct = round(u / total * 100, 1) if total > 0 else None
-        yoy = (u - by_year[prev]["Uniform"]) if prev else None
-        yoy_str = f"YoY: {'+' if yoy >= 0 else ''}{yoy} vs {prev}" if yoy is not None else None
-
-        return [
-            {
-                "indicator": "TPS Sworn Officers",
-                "value": u,
-                "unit": "officers",
-                "data_date": latest,
-                "context": yoy_str,
-                "source": "Toronto Police ASR — Personnel by Rank",
-                "notes": (
-                    f"Total TPS strength {total:,} ({sworn_pct}% sworn). "
-                    f"Includes {c:,} civilian staff. Data lag: ~1 year."
-                ),
-                "sector": "public_safety",
-                "status": "ok",
-            },
-            {
-                "indicator": "TPS Civilian Staff",
-                "value": c,
-                "unit": "staff",
-                "data_date": latest,
-                "context": f"{o} 'Other Staff' (auxiliary, cadets, crossing guards) not included",
-                "source": "Toronto Police ASR — Personnel by Rank",
-                "notes": "Civilian staff includes administrative, IT, communications, legal support.",
-                "sector": "public_safety",
-                "status": "ok",
-            },
-        ]
-    except Exception as e:
-        return [_err("TPS Sworn Officers", "Toronto Police ASR", url, str(e))]
-
-
-def fetch_tps_staffing_by_command():
-    """TPS Staffing by Command — approved vs actual fill rate + CSC/SOC split.
-    Source: Toronto Police via Toronto Open Data CKAN
-    Most recent year with both Approved + Actual = 2023 (2024 approved-only).
-    Returns: fill rate %, raw gap vs authorized, CSC% of uniform, SOC% of uniform.
-    """
-    url = (
-        "https://ckan0.cf.opendata.inter.prod-toronto.ca/dataset/"
-        "a6c63920-58d5-4183-912b-5b9c490b681b/resource/"
-        "ec24e8cb-e727-459d-a2f1-f2e7d2206e2a/download/tps-staffing-by-command.csv"
-    )
-    try:
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
-        r.raise_for_status()
-        rows = list(csv.DictReader(io.StringIO(r.text)))
-
-        # Find most recent year with BOTH Approved and Actual staffing data
-        year_metrics = defaultdict(set)
-        for row in rows:
-            if row["Organizational_Entity"] == "1 - Toronto Police Service":
-                year_metrics[row["Year"]].add(row["Type_of_Metric"])
-
-        complete_years = sorted([
-            y for y, metrics in year_metrics.items()
-            if "Approved Staffing" in metrics and "Actual Staffing" in metrics
-        ])
-        if not complete_years:
-            raise ValueError("No year found with both Approved and Actual staffing")
-
-        latest = complete_years[-1]
-
-        approved_total = 0
-        actual_total = 0
-        cmd_actual_uniform = defaultdict(int)
-
-        for row in rows:
-            if row["Year"] != latest:
-                continue
-            if row["Organizational_Entity"] != "1 - Toronto Police Service":
-                continue
-            if row["Category"] != "Uniform":
-                continue
-            try:
-                count = int(str(row["Count_"]).replace(",", "")) if str(row["Count_"]).strip() else 0
-            except Exception:
-                count = 0
-            if row["Type_of_Metric"] == "Approved Staffing":
-                approved_total += count
-            elif row["Type_of_Metric"] == "Actual Staffing":
-                actual_total += count
-                cmd_actual_uniform[row["Command_Name"]] += count
-
-        if approved_total == 0:
-            raise ValueError(f"No approved staffing data found for {latest}")
-
-        fill_pct = round(actual_total / approved_total * 100, 1)
-        gap = actual_total - approved_total
-        gap_str = f"{'+' if gap >= 0 else ''}{gap} vs {approved_total:,} authorized"
-
-        csc = cmd_actual_uniform.get("Community Safety Command", 0)
-        soc = cmd_actual_uniform.get("Specialized Operations Command", 0)
-        csc_pct = round(csc / actual_total * 100, 1) if actual_total > 0 else None
-        soc_pct = round(soc / actual_total * 100, 1) if actual_total > 0 else None
-
-        return [
-            {
-                "indicator": "TPS Uniform Fill Rate",
-                "value": fill_pct,
-                "unit": "%",
-                "data_date": latest,
-                "context": gap_str,
-                "source": "Toronto Police Staffing by Command",
-                "notes": (
-                    f"Actual {actual_total:,} uniform officers vs {approved_total:,} authorized. "
-                    f">100% means staffed above authorized complement. Data lag: ~1 year."
-                ),
-                "sector": "public_safety",
-                "status": "ok",
-            },
-            {
-                "indicator": "TPS Community Safety Command Share",
-                "value": csc_pct,
-                "unit": "% of uniform",
-                "data_date": latest,
-                "context": f"{csc:,} of {actual_total:,} uniform officers",
-                "source": "Toronto Police Staffing by Command",
-                "notes": (
-                    "Community Safety Command covers divisional policing (neighbourhood officers). "
-                    "Declining share since 2016 (76.6% → 68.8%). Data lag: ~1 year."
-                ),
-                "sector": "public_safety",
-                "status": "ok",
-            },
-            {
-                "indicator": "TPS Specialized Operations Command Share",
-                "value": soc_pct,
-                "unit": "% of uniform",
-                "data_date": latest,
-                "context": f"{soc:,} of {actual_total:,} uniform officers",
-                "source": "Toronto Police Staffing by Command",
-                "notes": (
-                    "Specialized Operations Command includes Emergency Task Force, "
-                    "Intelligence, Guns & Gangs, Major Crime. "
-                    "Rising share since 2016 (~14% → 19%). Data lag: ~1 year."
-                ),
-                "sector": "public_safety",
-                "status": "ok",
-            },
-        ]
-    except Exception as e:
-        return [_err("TPS Uniform Fill Rate", "Toronto Police Staffing by Command", url, str(e))]
-
-
-# ORCHESTRATOR
-# ══════════════════════════════════════════════════════════════════════════════
-
-SECTOR_SCRAPERS = {
-    "energy":      [fetch_ieso_generation_mix, fetch_ieso_ontario_demand,
-                    fetch_tcpl_mainline, fetch_brent_crude],
-    "water":       [fetch_active_water_outages, fetch_toronto_boil_advisories,
-                    fetch_toronto_shelter],
-    "health":      [fetch_ontario_er_capacity, fetch_phac_wastewater,
-                    fetch_ontario_icu_occupancy],
-    "food":        [fetch_statcan_cpi],
-    "transport":   [fetch_pearson_notams,
-                    fetch_ttc_ridership],
-    "environment": [fetch_toronto_aqhi],
-    "financial":   [fetch_bank_of_canada_rate, fetch_cad_usd_rate,
-                    fetch_toronto_fuel_price, fetch_toronto_unemployment,
-                    fetch_trreb_market, fetch_osb_insolvency],
-    "public_safety": [fetch_tps_personnel, fetch_tps_staffing_by_command],
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text1);
+    font-size: 15px;
+    line-height: 1.5;
+  }
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .topbar {
+    background: var(--surface);
+    border-bottom: 0.5px solid var(--border2);
+    padding: 0 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    height: 52px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  .topbar-left { display: flex; align-items: baseline; gap: 10px; }
+  .topbar-title { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+  .topbar-sub { font-size: 12px; color: var(--text3); }
+  .topbar-right { display: flex; align-items: center; gap: 12px; }
+  .pulse { display: inline-block; width: 7px; height: 7px;
+    border-radius: 50%; background: var(--ok); margin-right: 5px;
+    animation: pulse 2.5s ease-in-out infinite; }
+  @keyframes pulse {
+    0%,100% { opacity: 1; } 50% { opacity: 0.3; }
+  }
+  #status-dot.warn  { background: var(--warn); animation: none; }
+  #status-dot.alert { background: var(--alert); animation: pulse 1s infinite; }
+  #status-dot.error { background: var(--alert); animation: none; opacity: .5; }
+
+  .main { max-width: 1100px; margin: 0 auto; padding: 1.5rem; }
+
+  .summary-bar {
+    display: flex; gap: 8px; flex-wrap: wrap;
+    margin-bottom: 1.5rem; align-items: center;
+  }
+  .pill {
+    font-size: 12px; padding: 3px 10px;
+    border-radius: 99px; font-weight: 500;
+  }
+  .pill-ok     { background: var(--ok-bg);     color: var(--ok); }
+  .pill-warn   { background: var(--warn-bg);   color: var(--warn); }
+  .pill-alert  { background: var(--alert-bg);  color: var(--alert); }
+  .pill-manual { background: var(--manual-bg); color: var(--manual); }
+  .pill-error  { background: var(--alert-bg);  color: var(--alert); opacity:.7; }
+  .summary-date { font-size: 12px; color: var(--text3); margin-left: auto; }
+
+  .alert-banner {
+    background: var(--alert-bg);
+    border: 0.5px solid var(--alert);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 1.25rem;
+    font-size: 13px;
+    color: var(--alert);
+  }
+  .alert-banner strong { font-weight: 600; }
+
+  .sector { margin-bottom: 1.75rem; }
+  .sector-header {
+    font-size: 11px; font-weight: 600; letter-spacing: .07em;
+    text-transform: uppercase; color: var(--text3);
+    margin-bottom: 8px; padding-bottom: 6px;
+    border-bottom: 0.5px solid var(--border);
+  }
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    gap: 8px;
+  }
+  .card {
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px 10px;
+    position: relative;
+    transition: border-color .15s;
+  }
+  .card:hover { border-color: var(--border2); }
+  .card.is-alert { border-color: var(--alert); background: var(--alert-bg); }
+  .card.is-warn  { border-color: var(--warn);  background: var(--warn-bg); }
+  .card.is-manual { opacity: .65; }
+  .card.is-manual .card-info-btn { opacity: 1; }
+  .card.is-manual:hover { opacity: 1; }
+
+  .card-dot {
+    position: absolute; top: 11px; right: 11px;
+    width: 7px; height: 7px; border-radius: 50%;
+  }
+  .dot-ok     { background: var(--ok); }
+  .dot-warn   { background: var(--warn); }
+  .dot-alert  { background: var(--alert); }
+  .dot-manual { background: var(--manual); }
+  .dot-error  { background: var(--alert); opacity: .5; }
+
+  .card-label {
+    font-size: 12px; color: var(--text2);
+    margin-bottom: 4px; padding-right: 16px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .card-value {
+    font-size: 22px; font-weight: 600;
+    letter-spacing: -.02em; line-height: 1.1;
+    color: var(--text1);
+  }
+  .card.is-alert .card-value { color: var(--alert); }
+  .card.is-warn  .card-value { color: var(--warn); }
+  .card.is-manual .card-value {
+    font-size: 13px; font-weight: 400;
+    color: var(--text3); margin-top: 2px;
+  }
+  .card-unit    { font-size: 11px; color: var(--text3); margin-top: 2px; }
+  .card-context { font-size: 11px; color: var(--text2); margin-top: 3px; font-style: italic; }
+  .card-date    { font-size: 11px; color: var(--text3); margin-top: 6px; }
+  .card-note  {
+    font-size: 11px; color: var(--warn);
+    margin-top: 5px; line-height: 1.3;
+  }
+  .card.is-alert .card-note { color: var(--alert); }
+
+  /* ── Tier badge ────────────────────────────────────────────────────────── */
+  .card-tier {
+    display: inline-block;
+    font-size: 10px; font-weight: 600; letter-spacing: .04em;
+    padding: 1px 6px; border-radius: 99px;
+    margin-top: 5px;
+    background: rgba(24,95,165,0.10); color: var(--blue);
+    opacity: .8;
+  }
+  @media (prefers-color-scheme: dark) {
+    .card-tier { background: rgba(133,183,235,0.12); }
+  }
+
+  /* ── Notes tooltip ─────────────────────────────────────────────────────── */
+  /* The card is the positioning parent (already position:relative). */
+  .card-info-btn {
+    position: absolute; bottom: 9px; right: 10px;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: transparent;
+    border: 0.5px solid var(--border2);
+    color: var(--text3);
+    font-size: 10px; font-weight: 700; line-height: 16px;
+    text-align: center; cursor: default;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    transition: border-color .1s, color .1s;
+    z-index: 1;
+  }
+  .card:hover .card-info-btn { border-color: var(--blue); color: var(--blue); }
+
+  .card-tooltip {
+    display: none;
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: 340px;
+    max-height: 340px;
+    overflow-y: auto;
+    background: var(--surface);
+    border: 0.5px solid var(--border2);
+    border-radius: 8px;
+    padding: 10px 13px;
+    font-size: 11px; line-height: 1.55; color: var(--text2);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+    z-index: 100;
+    pointer-events: none;
+    white-space: normal;
+  }
+  .tooltip-scraper {
+    color: var(--text2);
+  }
+  .tooltip-divider {
+    border: none;
+    border-top: 0.5px solid var(--border);
+    margin: 7px 0;
+  }
+  .tooltip-knowledge-title {
+    font-weight: 600; color: var(--text1);
+    margin-bottom: 3px; font-size: 11px;
+  }
+  .tooltip-knowledge-body {
+    color: var(--text2);
+  }
+  /* Flip to below the card when near the top of the viewport */
+  .card-tooltip.flip-down {
+    bottom: auto;
+    top: calc(100% + 6px);
+  }
+  /* Nudge left/right when centered tooltip would overflow viewport edges */
+  .card-tooltip.nudge-left  { left: auto; right: -6px;  transform: none; }
+  .card-tooltip.nudge-right { left: -6px; transform: none; }
+  .card:hover .card-tooltip { display: block; }
+
+  /* Ensure cards in the last grid row don't clip their tooltip */
+  .cards { overflow: visible; }
+  .sector { overflow: visible; }
+
+  .legend {
+    display: flex; gap: 16px; flex-wrap: wrap;
+    font-size: 12px; color: var(--text2);
+    margin-bottom: 1.25rem; align-items: center;
+  }
+  .legend-item { display: flex; align-items: center; gap: 5px; }
+  .legend-dot  { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+
+  .footer {
+    font-size: 11px; color: var(--text3);
+    border-top: 0.5px solid var(--border);
+    padding: 1rem 0 2rem;
+    margin-top: .5rem;
+    display: flex; justify-content: space-between;
+    flex-wrap: wrap; gap: 8px;
+  }
+
+  #loading {
+    text-align: center; padding: 4rem 0;
+    font-size: 14px; color: var(--text3);
+  }
+  #error-msg {
+    background: var(--alert-bg);
+    border: 0.5px solid var(--alert);
+    border-radius: 8px; padding: 1rem;
+    color: var(--alert); font-size: 13px;
+    margin: 2rem 0; display: none;
+  }
+
+  .brief-panel {
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: 10px;
+    padding: 1.5rem;
+    margin-bottom: 1.75rem;
+  }
+  .brief-header {
+    display: flex; align-items: baseline;
+    justify-content: space-between; flex-wrap: wrap;
+    gap: 8px; margin-bottom: 1rem;
+    padding-bottom: .75rem;
+    border-bottom: 0.5px solid var(--border);
+  }
+  .brief-title { font-size: 14px; font-weight: 600; color: var(--text1); }
+  .brief-date  { font-size: 12px; color: var(--text3); }
+  .brief-badge {
+    font-size: 11px; padding: 2px 8px;
+    border-radius: 99px; font-weight: 500;
+    background: var(--warn-bg); color: var(--warn);
+  }
+  .brief-content { font-size: 14px; line-height: 1.7; color: var(--text1); }
+  .brief-content h2 {
+    font-size: 13px; font-weight: 600; color: var(--text2);
+    text-transform: uppercase; letter-spacing: .05em;
+    margin: 1rem 0 .4rem;
+  }
+  .brief-content h2:first-child { margin-top: 0; }
+  .brief-content p  { margin-bottom: .75rem; }
+  .brief-content ul { margin: .25rem 0 .75rem 1.25rem; }
+  .brief-content li { margin-bottom: .25rem; }
+  .brief-content em { color: var(--text2); font-style: normal; font-size: 12px; }
+  .brief-escalated { border-color: var(--alert); }
+  .brief-escalated .brief-badge { background: var(--alert-bg); color: var(--alert); }
+  .brief-loading { font-size: 13px; color: var(--text3); font-style: italic; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-left">
+    <span class="topbar-title">Toronto Infrastructure Intelligence</span>
+    <span class="topbar-sub" id="topbar-sub">loading…</span>
+  </div>
+  <div class="topbar-right">
+    <span id="status-dot" class="pulse"></span>
+  </div>
+</div>
+
+<div class="main">
+  <div id="loading">Loading data…</div>
+  <div id="error-msg"></div>
+  <div id="brief-panel" style="display:none"></div>
+  <div id="dashboard" style="display:none">
+    <div class="summary-bar" id="summary-bar"></div>
+    <div id="alert-banners"></div>
+    <div class="legend">
+      <span class="legend-item"><span class="legend-dot dot-ok"></span>normal</span>
+      <span class="legend-item"><span class="legend-dot dot-warn"></span>watch</span>
+      <span class="legend-item"><span class="legend-dot dot-alert"></span>alert</span>
+      <span class="legend-item"><span class="legend-dot dot-manual"></span>manual retrieval</span>
+    </div>
+    <div id="sectors"></div>
+    <div class="footer">
+      <span id="footer-sources">Toronto Infrastructure Intelligence</span>
+      <span id="footer-run"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+const DATA_URL = "https://data.criticalto.ca/tii_data_latest.json";
+const BRIEF_URL = "https://data.criticalto.ca/tii_brief_latest.md";
+
+const SECTOR_ORDER = ["energy","water","health","food","transport","environment","financial","public_safety"];
+const SECTOR_LABELS = {
+  energy:"Energy", water:"Water", health:"Health",
+  food:"Food & prices", transport:"Transport",
+  environment:"Environment", financial:"Financial",
+  public_safety:"Public Safety & Cost"
+};
+
+// ── Static knowledge layer ────────────────────────────────────────────────
+// Keyed by lowercase substring of indicator name.
+// Each entry: { title, body } — title is bolded, body is plain text.
+// Matched by first key found in the indicator name (most specific first).
+const CARD_KNOWLEDGE = {
+
+  // ENERGY — generation sources
+  "nuclear output": {
+    title: "Ontario nuclear fleet",
+    body: "Three stations supply ~55% of Ontario's electricity. " +
+          "Darlington (Clarington, on Lake Ontario): 4 CANDU reactors, 3,512 MW capacity — currently undergoing refurbishment unit by unit through 2026. " +
+          "Bruce (Kincardine, on Lake Huron): 8 CANDU reactors in two stations, 6,232 MW — largest operating nuclear facility in the Western Hemisphere. " +
+          "Pickering (Pickering, on Lake Ontario): 4 of 8 original CANDU units still operating, ~2,000 MW — licensed to run until 2026, with debate over further extension. " +
+          "CANDU reactors use heavy water and natural uranium, allowing refuelling while online."
+  },
+  "hydro output": {
+    title: "Ontario hydroelectric system",
+    body: "Hydro contributes ~24% of Ontario generation and is the primary dispatchable clean source. " +
+          "Niagara: Sir Adam Beck 1 & 2 (Queenston) plus Sir Adam Beck Pump Generating Station — combined ~1,800 MW. Water flow governed by the International Joint Commission treaty with the US. " +
+          "Ottawa River: Chats Falls, Barrett Chute, and others operated by OPG and Hydro-Ottawa. " +
+          "Northern Ontario: dozens of run-of-river stations on the Mattagami, Abitibi, Mississagi, and other rivers. " +
+          "Total Ontario hydro capacity: ~8,000 MW (including contracted private). Output varies significantly with precipitation and seasonal snowmelt."
+  },
+  "gas output": {
+    title: "Ontario gas peaker fleet",
+    body: "Natural gas plants are marginal-cost: they run only when baseload (nuclear + hydro) cannot meet demand, making gas output the primary real-time demand stress signal. " +
+          "Major stations: Lennox (Napanee area, 2,100 MW oil/gas, rarely dispatched), Portlands Energy Centre (Toronto waterfront, 550 MW combined-cycle), Goreway (Brampton, 875 MW), York Energy Centre (Vaughan, 393 MW), Halton Hills (400 MW). " +
+          "Many smaller peakers (50-200 MW) across the grid. " +
+          "Elevated gas dispatch raises wholesale electricity prices under the HOEP (Hourly Ontario Energy Price) and signals that cold snaps, heat waves, or baseload outages are stressing the system. " +
+          "Ontario is phasing out gas generation by 2030-32 under provincial policy, though the timeline is under review."
+  },
+  "wind output": {
+    title: "Ontario wind generation",
+    body: "Ontario has ~5,600 MW of installed wind capacity, mostly contracted under the FIT and LRP programs. " +
+          "Primary regions: Bruce Peninsula and Lake Huron shoreline (strongest consistent winds), Prince Edward County, Amaranth/Shelburne area, and scattered eastern Ontario sites. " +
+          "Wind output is non-dispatchable and variable — IESO forecasts and curtails wind when the grid cannot absorb it (spill). " +
+          "Ontario frequently exports surplus wind generation to Quebec, Michigan, and New York overnight."
+  },
+  "solar output": {
+    title: "Ontario solar generation",
+    body: "Ontario has ~4,300 MW of installed solar capacity — predominantly small rooftop and ground-mount systems contracted under the FIT microFIT programs. " +
+          "Output is highly variable by season and time of day: peaks mid-afternoon in summer, near-zero in winter evenings. " +
+          "The large Sarnia Photovoltaic Power Plant (~80 MW) was the world's largest solar farm at its 2010 opening. " +
+          "Solar contributes to midday demand reduction but does not help with evening peak or winter morning load."
+  },
+  "biofuel output": {
+    title: "Ontario bioenergy generation",
+    body: "A small but dispatchable segment of the Ontario grid. " +
+          "Sources include landfill gas (multiple sites), biomass combustion (Atikokan Generating Station converted from coal in 2014, 205 MW), and biogas from wastewater treatment. " +
+          "Bioenergy is valued for dispatchability — it can be scheduled unlike wind and solar. " +
+          "Atikokan in northwestern Ontario is Canada's largest biomass power plant by capacity."
+  },
+  "total generation": {
+    title: "Ontario grid total output",
+    body: "The sum of all fuel sources dispatched by IESO in a given hour. " +
+          "Ontario's grid is operated by IESO (Independent Electricity System Operator), which balances supply and demand in real time across ~100 generators. " +
+          "Ontario is a net exporter most hours, sending surplus power to Quebec, Manitoba, Michigan, New York, and Minnesota via interconnections. " +
+          "Annual generation is roughly 140-150 TWh. Peak demand typically occurs on hot summer weekday afternoons (July-August) and cold winter mornings (January-February)."
+  },
+  "peak demand": {
+    title: "Ontario demand index",
+    body: "Measures current Ontario-wide electricity consumption relative to the 2024 annual peak (~25,000 MW). " +
+          "Demand is served by Ontario generators plus net imports from Quebec and US states. " +
+          "IESO publishes a reliability outlook quarterly — reserve margin (supply above peak requirement) is the key long-term adequacy metric. " +
+          "Demand response programs allow large industrial users (smelters, auto plants) to shed load during supply emergencies in exchange for rate credits."
+  },
+  "ontario demand": {
+    title: "Ontario real-time demand",
+    body: "Total metered consumption across the Ontario grid in MW. " +
+          "Excludes losses and self-generation (e.g. industrial cogen). " +
+          "The IESO publishes this in near-real-time via the Ontario Demand Multiday file, updated hourly. " +
+          "Seasonal baseline: winter peak ~19,000-21,000 MW on cold mornings; summer peak ~22,000-25,000 MW on hot afternoons; overnight minimum ~12,000-14,000 MW."
+  },
+
+  // ENERGY — supply chain
+  "tcpl parkway": {
+    title: "Eastern Triangle — Parkway Receipts",
+    body: "The Parkway hub (near Milton, ON) is the primary gas delivery point for the Greater Toronto Area and eastern Ontario. " +
+          "Gas arrives here via TC Energy's Mainline from western Canadian fields (Alberta and BC), having transited the Northern Ontario Line. " +
+          "Union Gas (now Enbridge Gas) distributes from Parkway to residential and commercial users across the GTA. " +
+          "The Dawn Hub (near Sarnia) is the main southwestern Ontario storage and trading point; Dawn-to-Parkway flow supplements Mainline receipts during peak demand. " +
+          "High Parkway utilization means supply is tight at Toronto's gas entry point — a precursor to price spikes and potential curtailment of interruptible industrial users."
+  },
+  "northern ontario line": {
+    title: "TCPL Northern Ontario Line",
+    body: "The Northern Ontario Line (NOL) is the segment of TC Energy's Mainline that crosses northern Ontario from the Manitoba border to the Parkway area. " +
+          "It is the main trunk through which western Canadian gas reaches Toronto and eastern Canada. " +
+          "Capacity: approximately 4,400 MMcf/day at peak. " +
+          "Constraint on the NOL restricts all downstream supply, including Parkway receipts and ultimately Toronto pump prices. " +
+          "The NOL also serves as a transit route for gas flowing onward to Quebec and the Maritimes via other interconnects."
+  },
+  "brent crude": {
+    title: "ICE Brent crude benchmark",
+    body: "Brent is priced at the Sullom Voe terminal in the Shetland Islands and reflects North Sea crude blends. " +
+          "It prices approximately 2/3 of globally traded oil. WTI (West Texas Intermediate) is the North American benchmark and typically trades $2-5/bbl below Brent. " +
+          "Ontario refineries (Imperial Oil Sarnia, Shell Sarnia) process a mix of western Canadian heavy crude and imported light crude. " +
+          "Pump price transmission lag: a $10/bbl move in Brent takes roughly 2-3 weeks to fully appear at Ontario pumps, filtered through refinery runs, wholesale rack prices, and retailer margins. " +
+          "The CAD/USD exchange rate amplifies moves — a weaker loonie makes every barrel more expensive in Canadian dollars."
+  },
+
+  // WATER
+  "water outage": {
+    title: "Toronto water distribution network",
+    body: "Toronto Water operates ~6,000 km of water mains ranging from 19th-century cast iron to modern ductile iron and PVC. " +
+          "Average age of the network is over 40 years; the oldest mains in the downtown core date to the 1880s. " +
+          "Approximately 1,200-1,500 watermain breaks occur annually — the majority in winter due to frost heave and temperature cycling. " +
+          "Breaks are categorized as emergency (unplanned service interruption) or planned (maintenance with advance notice). " +
+          "Toronto Water targets 15-20 km of watermain replacement per year under its capital plan."
+  },
+  "watermain break": {
+    title: "Toronto watermain breaks",
+    body: "Toronto Water operates ~6,000 km of water mains ranging from 19th-century cast iron to modern ductile iron and PVC. " +
+          "Average age of the network is over 40 years; the oldest mains in the downtown core date to the 1880s. " +
+          "Approximately 1,200-1,500 breaks occur annually — the majority in winter due to frost heave and temperature cycling. " +
+          "Toronto Water targets 15-20 km of watermain replacement per year under its capital plan."
+  },
+  "boil water": {
+    title: "Toronto drinking water system",
+    body: "Toronto operates four water treatment plants serving ~4 million people. " +
+          "R.C. Harris (The Beach, opened 1941): capacity 950 ML/day, serves the east end and downtown — one of the most architecturally significant water treatment plants in North America. " +
+          "F.J. Horgan (Scarborough): capacity 1,140 ML/day, largest plant, serves Scarborough and northeast Toronto. " +
+          "R.L. Clark (Etobicoke): capacity 950 ML/day, serves west Toronto and Etobicoke. " +
+          "Island (Toronto Islands): capacity 190 ML/day, serves downtown and the islands. " +
+          "All four draw from Lake Ontario. Toronto's water consistently meets or exceeds Ontario Drinking Water Quality Standards. " +
+          "A boil water advisory in this system is a rare and significant public health event."
+  },
+  "shelter occupancy": {
+    title: "Toronto shelter system",
+    body: "Toronto funds and operates the largest municipal shelter system in Canada, with capacity across ~70 sites for families, singles, youth, and Indigenous-specific programs. " +
+          "The 4am occupancy snapshot is the standard daily measure — it captures the overnight low, after late arrivals and before morning departures. " +
+          "System capacity fluctuates with seasonal hotel conversions and modular/temporary sites. " +
+          "Occupancy above 95% is the City's threshold for declaring shelter capacity pressure and activating the Warming Centre protocol in winter. " +
+          "Demand drivers include housing unaffordability, mental health and addictions, and refugee claimant arrivals."
+  },
+  "shelter system capacity": {
+    title: "Toronto shelter system",
+    body: "Toronto funds and operates the largest municipal shelter system in Canada, with capacity across ~70 sites for families, singles, youth, and Indigenous-specific programs. " +
+          "The 4am occupancy snapshot is the standard daily measure — it captures the overnight low, after late arrivals and before morning departures. " +
+          "System capacity fluctuates with seasonal hotel conversions and modular/temporary sites. " +
+          "Occupancy above 95% is the City's threshold for declaring shelter capacity pressure and activating the Warming Centre protocol in winter."
+  },
+
+  // HEALTH
+  "aqhi": {
+    title: "Air Quality Health Index (AQHI)",
+    body: "The AQHI was developed jointly by Health Canada and Environment Canada and replaced the older Air Quality Index in Ontario in 2015. " +
+          "Scale: 1-3 Low Risk (most people can be active outdoors), 4-6 Moderate Risk (sensitive individuals should reduce prolonged outdoor exertion), 7-10 High Risk (general population should reduce strenuous outdoor activity), 10+ Very High Risk (avoid outdoor exertion). " +
+          "The index combines ground-level ozone (O3), nitrogen dioxide (NO2), and fine particulate matter (PM2.5). " +
+          "Toronto monitoring sites: Etobicoke North, Toronto West, Toronto East, and Oshawa (as regional reference). " +
+          "Summer smog events typically involve ozone from vehicle emissions baking in heat; winter events more often involve particulate from wood burning and traffic."
+  },
+  "air quality": {
+    title: "Air Quality Health Index (AQHI)",
+    body: "The AQHI was developed jointly by Health Canada and Environment Canada and replaced the older Air Quality Index in Ontario in 2015. " +
+          "Scale: 1-3 Low Risk, 4-6 Moderate Risk (sensitive individuals reduce exertion), 7-10 High Risk (general population reduce strenuous activity), 10+ Very High Risk. " +
+          "The index combines ground-level ozone (O3), nitrogen dioxide (NO2), and fine particulate matter (PM2.5). " +
+          "Summer smog events typically involve ozone from vehicle emissions; winter events more often involve particulate from wood burning and traffic."
+  },
+  "wastewater": {
+    title: "Wastewater virus surveillance",
+    body: "PHAC's national wastewater surveillance program detects viral RNA fragments in sewage — a leading indicator of community infection levels that does not depend on clinical testing rates. " +
+          "Toronto is served by three major treatment plants: Ashbridges Bay (capacity 818 ML/day, largest in Canada, serves most of the old City of Toronto and inner suburbs), Humber (capacity 473 ML/day, serves Etobicoke and northwest Toronto), and Highland Creek (capacity 98 ML/day, serves northeast Scarborough). " +
+          "Together Ashbridges Bay and Humber monitor approximately 73% of Toronto's sewershed population. " +
+          "Signal levels: Low (background), Moderate (community transmission ongoing), High (significant active transmission). Typically leads clinical case counts by 4-7 days."
+  },
+  "icu": {
+    title: "Ontario ICU system",
+    body: "Ontario's critical care system is coordinated by the Critical Care Services Ontario (CCSO) network. " +
+          "Total ICU capacity across Ontario: approximately 2,100 adult beds in normal operations, expandable to ~3,500 under surge protocols. " +
+          "Major Toronto critical care centres: Toronto General (UHN), St. Michael's (Unity Health), Sunnybrook, SickKids (pediatric), and Mount Sinai. " +
+          "Ontario typically operates at 80-90% ICU occupancy year-round due to chronic understaffing and bed constraints — leaving limited surge capacity. " +
+          "The COVID-era public dataset was discontinued November 14, 2024; current data is available only through CCSO to authorized users."
+  },
+  "er capacity": {
+    title: "Ontario emergency department system",
+    body: "Ontario has approximately 150 emergency departments, coordinated through the Health Quality Ontario wait time reporting system. " +
+          "Key benchmarks: high-acuity patients (CTAS 1-2) should be seen within 15-30 minutes; admitted patients should be transferred to a ward bed within 8 hours. " +
+          "Toronto's major trauma and tertiary EDs: Toronto General, St. Michael's, Sunnybrook (Level 1 trauma centre), and Toronto Western. " +
+          "Hallway medicine — patients in hospital corridors awaiting inpatient beds — has been a persistent Ontario structural issue since at least 2017. " +
+          "Publicly reported wait time data is available through Health Quality Ontario but is not available as a downloadable dataset."
+  },
+
+  // FINANCIAL
+  "bank of canada": {
+    title: "Bank of Canada policy rate",
+    body: "The overnight rate is the interest rate at which major financial institutions borrow and lend one-day funds among themselves. " +
+          "The Bank of Canada sets a target for this rate at eight fixed announcement dates per year. " +
+          "Transmission mechanism: the overnight rate influences prime rate (typically overnight + 2.2%), which directly sets variable-rate mortgages, HELOCs, and many business loans. " +
+          "Fixed mortgage rates follow Government of Canada bond yields, which respond to — but are not set by — the overnight rate. " +
+          "Toronto housing affordability is acutely sensitive: a 1% rate increase on a $900,000 variable mortgage adds roughly $750/month to carrying costs. " +
+          "The BoC's dual mandate is price stability (2% CPI target) and maximum sustainable employment."
+  },
+  "cad/usd": {
+    title: "Canadian dollar exchange rate",
+    body: "Canada exports ~75% of its goods to the United States, making the CAD/USD rate a core economic indicator. " +
+          "A weaker CAD (higher number, e.g. 1.45 means $1 USD = $1.45 CAD) raises costs for imported goods, amplifies oil price increases at the pump, and increases debt servicing costs for USD-denominated borrowing. " +
+          "Drivers of CAD weakness: lower oil prices (Canada is a major oil exporter), Bank of Canada rate cuts relative to the Fed, global risk-off sentiment, and US tariff threats. " +
+          "Historical context: CAD traded near parity in 2011-2013 (oil boom); fell to ~1.46 in early 2016 (oil price collapse); reached ~1.45 in early 2025 amid tariff concerns. " +
+          "The Bank of Canada publishes the official daily closing rate at 16:30 ET on business days."
+  },
+  "fuel price": {
+    title: "Toronto retail gasoline price",
+    body: "Toronto pump prices reflect: Brent crude (global benchmark) converted to CAD, plus refinery processing margin, plus wholesale distribution margin, plus federal excise tax (10 cents/L), plus Ontario fuel tax (14.7 cents/L), plus federal carbon tax (currently suspended), plus HST (13%). " +
+          "Taxes and fixed costs represent roughly 35-45 cents/L regardless of crude price. " +
+          "The Toronto market is served primarily by Imperial Oil (Sarnia refinery), Shell (Sarnia), and Suncor (Edmonton/Sarnia blend). " +
+          "Stockr.net forecasts daily prices from commodity market movements — this is a calculated forecast, not crowd-sourced. " +
+          "GasBuddy and other crowd-sourced sites track actual posted prices at individual stations, which can vary 5-10 cents/L across Toronto on the same day."
+  },
+  "unemployment": {
+    title: "Toronto CMA unemployment rate",
+    body: "The Toronto CMA (Census Metropolitan Area) covers Toronto, Peel, York, Durham, and Halton regions — approximately 6.6 million people and ~2.8 million workers. " +
+          "The rate is a 3-month moving average of the Labour Force Survey, seasonally adjusted. It lags real conditions by ~5-6 weeks (survey conducted, then ~5-week publication delay). " +
+          "Toronto's labour market is Canada's largest and most diverse, dominated by finance, real estate, professional services, and tech. " +
+          "Pre-pandemic baseline (2019): ~5.5-6.0%. COVID peak (April 2020): ~14.5%. Post-pandemic recovery floor (2022-23): ~5.8-6.5%. " +
+          "Tariff-period elevated level (Sep 2025): ~8.9% — reflecting reduced cross-border manufacturing activity and slowing tech hiring."
+  },
+  "trreb": {
+    title: "Toronto Regional Real Estate Board",
+    body: "TRREB covers the Greater Toronto Area including Toronto, Peel, York, Durham, and Halton — roughly 7 million people across ~3,000 sq km. " +
+          "Sales-to-New-Listings Ratio (SNR): below 40% is a buyer's market (supply exceeds demand, prices fall or stagnate); 40-60% is balanced; above 60% is a seller's market (demand exceeds supply, prices rise). " +
+          "The GTA housing market is structurally supply-constrained due to restrictive zoning, long development approval timelines, and geographic limits (greenbelt, lake). " +
+          "Average selling price covers all residential types (detached, semi, townhouse, condo). Detached prices in Toronto proper typically run 40-60% above the board-wide average. " +
+          "Data is published in the first week of each month for the prior month — always a one-month lag."
+  },
+  "insolvency": {
+    title: "Office of the Superintendent of Bankruptcy",
+    body: "The OSB (Office of the Superintendent of Bankruptcy) tracks all consumer and business insolvency filings in Canada. " +
+          "Consumer insolvencies have two forms: bankruptcy (debts discharged, assets liquidated) and consumer proposal (negotiated partial repayment plan, no asset seizure — now ~65% of all filings). " +
+          "Ontario accounts for roughly 37-40% of all Canadian insolvency filings, reflecting its population share and higher household debt levels. " +
+          "Insolvency filings typically lag economic deterioration by 6-18 months — people exhaust credit and savings before filing. " +
+          "A sustained rise above 5,000 Ontario filings/month historically corresponds with recession-level household financial stress."
+  },
+  "bankruptcy": {
+    title: "Office of the Superintendent of Bankruptcy",
+    body: "The OSB tracks all consumer and business insolvency filings in Canada. " +
+          "Consumer insolvencies: bankruptcy (debts discharged, assets liquidated) or consumer proposal (negotiated partial repayment, now ~65% of filings). " +
+          "Ontario accounts for roughly 37-40% of all Canadian filings. " +
+          "Filings typically lag economic deterioration by 6-18 months as people exhaust credit before filing. " +
+          "A sustained rise above 5,000 Ontario filings/month historically corresponds with recession-level household financial stress."
+  },
+  "cpi": {
+    title: "Consumer Price Index — Canada",
+    body: "Statistics Canada's CPI measures the price change of a fixed basket of goods and services purchased by a typical Canadian household. Base year: 2002 = 100. " +
+          "Food purchased from stores (grocery inflation) is a sub-index that typically moves faster than all-items CPI during supply shocks. " +
+          "Toronto households spend roughly 10-13% of their budget on food — making grocery inflation more consequential for lower-income households (who spend a higher proportion on food). " +
+          "CPI is released monthly, typically 4-6 weeks after the reference month. " +
+          "The Bank of Canada targets 2% annual CPI growth; it uses CPI-trim and CPI-median as preferred core inflation measures."
+  },
+  "grocery": {
+    title: "Food CPI — grocery inflation",
+    body: "The food-at-stores sub-index of Canada's CPI tracks grocery prices. It has run above the all-items rate since 2021, reflecting supply chain disruptions, drought in western North America, Ukrainian war impacts on wheat and sunflower oil, and retailer margin expansion. " +
+          "Shrinkflation (smaller package sizes at same price) is not captured in the CPI basket, meaning real food inflation may be understated. " +
+          "Ontario's grocery market is highly concentrated: Loblaw, Empire (Sobeys/FreshCo), and Metro together control roughly 70% of grocery sales."
+  },
+
+  // TRANSPORT
+  "pearson": {
+    title: "Toronto Pearson International Airport (CYYZ)",
+    body: "Pearson is Canada's busiest airport and the second-busiest in North America by passenger volume (~50 million pre-pandemic). " +
+          "Infrastructure: 5 runways (06L/24R, 06R/24L, 05/23, 15L/33R, 15R/33L) and two terminals (Terminal 1 — Star Alliance/Air Canada hub; Terminal 3 — other carriers). " +
+          "Airspace is managed by Nav Canada's Toronto Area Control Centre (ACC) in Trenton, with Pearson Tower handling ground and local traffic. " +
+          "A NOTAM severity of 0 = normal operations; 1 = reduced capacity (e.g. one approach procedure unavailable); 2 = runway closure (capacity reduced 20-50%); 3 = ATC flow control or security restriction (potential ground stops affecting all arrivals). " +
+          "Pearson is also a major air cargo hub — disruptions affect pharmaceutical cold chains, automotive parts, and perishable food imports."
+  },
+  "ttc ridership": {
+    title: "Toronto Transit Commission",
+    body: "The TTC operates subway (4 lines, 75 stations), streetcar (10 routes), and bus networks serving the City of Toronto. " +
+          "Pre-pandemic ridership (2019): ~535 million annual rides, making it Canada's largest and North America's third-busiest transit system. " +
+          "Post-pandemic recovery has been uneven: subway and downtown routes recovered faster; suburban bus routes lagged due to work-from-home patterns. " +
+          "Key capacity constraints: Line 2 Bloor-Danforth runs near capacity during peak hours between Kipling and Kennedy; the Eglinton Crosstown LRT (under construction, opening TBD) is intended to relieve east-west surface transit pressure. " +
+          "Ridership is a proxy for downtown economic activity and commuter confidence in the transit system."
+  },
+
+  // PUBLIC SAFETY
+  "tps sworn": {
+    title: "Toronto Police Service — sworn strength",
+    body: "TPS is organized into three commands: Community Safety Command (neighbourhood policing — 17 divisions), Specialized Operations Command (Emergency Task Force, Intelligence, Guns & Gangs, Major Crime, Traffic), and Corporate Command (administrative). " +
+          "Sworn officer complement has been roughly stable at ~5,100-5,200 since 2016 despite population growth of ~400,000 in the same period. " +
+          "Toronto's sworn officer ratio (~545 officers per 100,000 population) is lower than comparable North American cities — New York ~400, Chicago ~450, but both have much higher violent crime rates. " +
+          "Recruitment and retention are ongoing challenges: the academy produces ~200 graduates per year but attrition (retirement, resignation) runs ~150-200 annually, keeping net complement roughly flat."
+  },
+  "tps civilian": {
+    title: "TPS civilian staff",
+    body: "Civilian staff at TPS include communications operators (911 dispatch), IT professionals, forensic analysts, court officers, administrative support, and legal staff. " +
+          "Civilian roles have expanded as TPS has sought to free sworn officers from administrative duties — a process called 'civilianization' begun in earnest after the 2020 budget debates. " +
+          "Civilian staff are represented by TPSA (Toronto Police Association's civilian division) and CUPE Local 79. " +
+          "The ratio of civilian to sworn staff (~1:3) is broadly comparable to other large Canadian police services."
+  },
+  "fill rate": {
+    title: "TPS uniform fill rate",
+    body: "The fill rate compares actual deployed uniform officers against the Board-approved authorized complement. " +
+          "A rate above 100% means TPS is staffed above its authorized number (can occur during transition periods or when retirements lag projected). " +
+          "A rate below 95% typically indicates recruitment is not keeping pace with attrition and is operationally significant — fewer officers means reduced divisional staffing and overtime reliance. " +
+          "Complement decisions are made by the Toronto Police Services Board annually, balancing budget pressure against service level commitments. " +
+          "Data lag is approximately one year — the most recently available public dataset covers the prior calendar year."
+  },
+  "community safety command": {
+    title: "TPS Community Safety Command",
+    body: "Community Safety Command (CSC) covers the 17 geographic divisions that provide neighbourhood policing across Toronto. " +
+          "CSC officers handle the majority of calls for service — domestic, mental health, traffic, break-and-enter, and community engagement. " +
+          "CSC's share of uniform officers has declined from ~77% in 2016 to ~69% in recent years, as the Specialized Operations Command has grown. " +
+          "This shift reflects the expansion of specialized units (Guns & Gangs, Intelligence) in response to gun violence trends — but is sometimes cited as a factor in slower divisional response times."
+  },
+  "specialized operations": {
+    title: "TPS Specialized Operations Command",
+    body: "Specialized Operations Command (SOC) includes the Emergency Task Force (ETF — Toronto's tactical unit), Intelligence Services, Guns & Gangs Investigations, Major Crime, Homicide, Sexual Assault, Forensic Identification, and the Marine and Traffic units. " +
+          "SOC's share of uniform officers has risen from ~14% in 2016 to ~19% in recent years — driven primarily by the expansion of the Guns & Gangs unit following sustained increases in gun violence in 2018-2021. " +
+          "The ETF responds to barricaded persons, hostage situations, and high-risk warrant service — it is the primary tactical resource for the entire Toronto area."
+  },
+};
+
+// Match an indicator name to a knowledge entry.
+// Returns the knowledge object or null.
+function lookupKnowledge(indicatorName) {
+  const n = (indicatorName || "").toLowerCase();
+  // Check keys from longest to shortest to prefer more specific matches
+  const keys = Object.keys(CARD_KNOWLEDGE).sort((a, b) => b.length - a.length);
+  for(const key of keys) {
+    if(n.includes(key)) return CARD_KNOWLEDGE[key];
+  }
+  return null;
 }
 
+function inferSector(name) {
+  const n = (name||"").toLowerCase();
+  if(/nuclear|hydro|gas output|wind|solar|biofuel|ontario demand|peak demand|generation|brent|storage|grid|reserve|tcpl|pipeline|parkway|mainline/.test(n)) return "energy";
+  if(/water|shelter|watermain|wwtp/.test(n)) return "water";
+  if(/icu|er capacity|wastewater|blood/.test(n)) return "health";
+  if(/cpi|grocery|food bank|inflation/.test(n)) return "food";
+  if(/ttc|ridership|port|dwell|pearson|notam|airport|cyyz/.test(n)) return "transport";
+  if(/aqhi|air quality|smog/.test(n)) return "environment";
+  if(/bank|rate|cad|usd|fuel|price|bankruptcy|insolvency|eviction|unemployment|trreb|sales.to.new|selling price/.test(n)) return "financial";
+  if(/tps|sworn|fill rate|community safety|specialized operations|police staffing/.test(n)) return "public_safety";
+  return "other";
+}
 
-def check_network_connectivity():
-    import socket
-    hosts = {
-        "weather.gc.ca":                           "AQHI",
-        "reports-public.ieso.ca":                  "IESO Generation",
-        "www.ieso.ca":                             "IESO Demand",
-        "www150.statcan.gc.ca":                    "StatsCan",
-        "ckan0.cf.opendata.inter.prod-toronto.ca": "Toronto Open Data",
-        "data.ontario.ca":                         "Ontario ER data",
-        "health-infobase.canada.ca":               "PHAC Wastewater",
-        "www.bankofcanada.ca":                     "Bank of Canada",
-        "stooq.com":                               "Brent Crude (Stooq)",
-        "stockr.net":                              "Toronto fuel price (Stockr)",
-        "ontario.ca":                              "Ontario fuel prices",
-        "services3.arcgis.com":                   "Toronto Water outages (ArcGIS)",
-        "outagemap.torontohydro.com":              "Toronto Hydro outage map",
-        "trreb.ca":                                "TRREB housing market",
-        "www.cer-rec.gc.ca":                        "CER TransCanada Mainline data",
-        "plan.navcanada.ca":                        "NAV Canada NOTAM feed",
-        "www150.statcan.gc.ca":                    "StatsCan (CPI, unemployment, gas)",
-        "open.canada.ca":                          "OSB Insolvency",
+function inferTier(notes) {
+  // Extract tier label from the notes field written by the scraper.
+  // Returns "T1", "T2", "T3", or null.
+  if(!notes) return null;
+  const m = notes.match(/Tier\s+([123])\s*[—–-]/i);
+  if(!m) return null;
+  return "T" + m[1];
+}
+
+function fmtValue(r) {
+  const v = r.value;
+  if(v === null || v === undefined) return "manual";
+  if(typeof v === "number") {
+    if(v >= 10000) return v.toLocaleString("en-CA", {maximumFractionDigits:0});
+    if(v >= 1000)  return v.toLocaleString("en-CA", {maximumFractionDigits:0});
+    if(v >= 100)   return v.toLocaleString("en-CA", {maximumFractionDigits:1});
+    if(v >= 1)     return v.toLocaleString("en-CA", {maximumFractionDigits:2});
+    return v.toLocaleString("en-CA", {maximumFractionDigits:4});
+  }
+  return String(v);
+}
+
+function fmtDate(d) {
+  if(!d) return "";
+  const s = String(d).trim();
+  // ISO datetime: "2026-03-22T14:30:00Z" or "2026-03-22 14:30:00Z" — show date + HH:MM
+  if(s.length >= 16 && (s[10] === "T" || s[10] === " ")) {
+    return s.slice(0,10) + " " + s.slice(11,16);
+  }
+  // Date only
+  if(s.length >= 10) return s.slice(0,10);
+  return s;
+}
+
+function dotClass(s) {
+  return {ok:"dot-ok",warn:"dot-warn",alert:"dot-alert",
+          manual:"dot-manual",error:"dot-error"}[s] || "dot-manual";
+}
+
+function simpleMarkdown(md) {
+  if(!md) return "";
+  // Use string replace where possible to avoid regex/newline issues in sandboxed environments
+  let out = md;
+  out = out.replace(/^## (.+)$/gm, "<h2>$1</h2>");
+  out = out.replace(/^\* (.+)$/gm, "<li>$1</li>");
+  out = out.split("\n\n").join("</p><p>");
+  out = out.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+  return out.trim();
+}
+
+async function loadBrief(isAlert) {
+  // Brief is manually authored — hide panel silently if file not present
+  const panel = document.getElementById("brief-panel");
+  try {
+    const res = await fetch(BRIEF_URL + "?t=" + Date.now());
+    if(!res.ok) throw new Error("not found");
+    const md = await res.text();
+
+    const lines = md.split("\n");
+    const dateMatch = lines.find(l => l.startsWith("*Week of"));
+    const briefDate = dateMatch ? dateMatch.replace(/\*/g, "").trim() : "";
+    const body = lines.slice(2).join("\n");
+
+    const escalated = isAlert ? " brief-escalated" : "";
+    const badge = isAlert
+      ? '<span class="brief-badge">Alert escalation — updated daily</span>'
+      : '<span class="brief-badge" style="background:var(--ok-bg);color:var(--ok)">Weekly brief</span>';
+
+    panel.style.display = "block";
+    panel.innerHTML = `
+      <div class="brief-panel${escalated}">
+        <div class="brief-header">
+          <span class="brief-title">Intelligence brief</span>
+          ${badge}
+          <span class="brief-date">${briefDate}</span>
+        </div>
+        <div class="brief-content"><p>${simpleMarkdown(body)}</p></div>
+      </div>`;
+  } catch(e) {
+    panel.style.display = "none";
+  }
+}
+
+function render(data) {
+  const results = data.results || [];
+  const t = data.totals || {};
+  const ts = data.run_timestamp || "";
+  const rd = data.run_date || ts.slice(0,10);
+
+  // Build a human-readable datetime string from the ISO timestamp
+  // run_timestamp is UTC ISO: "2026-03-22T14:30:00Z"
+  let rdDisp = rd || "unknown";
+  let rdFull = rd || "unknown";
+  if(ts && ts.length >= 16) {
+    const dateStr = ts.slice(0,10);
+    const timeStr = ts.slice(11,16);   // HH:MM
+    rdFull  = `${dateStr} ${timeStr} UTC`;
+    rdDisp  = rdFull;
+  }
+
+  document.getElementById("loading").style.display = "none";
+  document.getElementById("dashboard").style.display = "block";
+  document.getElementById("topbar-sub").textContent = rdDisp;
+
+  const dot = document.getElementById("status-dot");
+  dot.className = "pulse";
+  if((t.alert||0) > 0)     { dot.className = "alert"; }
+  else if((t.warn||0) > 0) { dot.className = "warn"; }
+
+  const bar = document.getElementById("summary-bar");
+  bar.innerHTML = "";
+  const pills = [
+    [t.ok,    "ok",     "ok"],
+    [t.warn,  "warn",   "warn"],
+    [t.alert, "alert",  "alert"],
+    [t.error, "error",  "errors"],
+    [t.manual,"manual", "manual"],
+  ];
+  for(const [n, cls, label] of pills) {
+    if(!n) continue;
+    const p = document.createElement("span");
+    p.className = `pill pill-${cls}`;
+    p.textContent = `${n} ${label}`;
+    bar.appendChild(p);
+  }
+  const dateSpan = document.createElement("span");
+  dateSpan.className = "summary-date";
+  dateSpan.textContent = `updated ${rdFull}`;
+  bar.appendChild(dateSpan);
+
+  const banners = document.getElementById("alert-banners");
+  banners.innerHTML = "";
+  const alerts = results.filter(r => r.status === "alert");
+  if(alerts.length > 0) {
+    const b = document.createElement("div");
+    b.className = "alert-banner";
+    b.innerHTML = "<strong>Active alerts:</strong> " +
+      alerts.map(r => `${r.indicator} (${fmtValue(r)} ${r.unit||""}) — ${r.threshold_note||""}`).join(" &nbsp;·&nbsp; ");
+    banners.appendChild(b);
+  }
+
+  const bySector = {};
+  for(const r of results) {
+    const s = r.sector || inferSector(r.indicator);
+    if(!bySector[s]) bySector[s] = [];
+    bySector[s].push(r);
+  }
+
+  const allKeys = [...SECTOR_ORDER];
+  for(const k of Object.keys(bySector)) {
+    if(!allKeys.includes(k)) allKeys.push(k);
+  }
+
+  loadBrief((t.alert||0) > 0);
+
+  // After render: correct tooltips that would overflow the viewport
+  requestAnimationFrame(() => {
+    document.querySelectorAll(".card-tooltip").forEach(tip => {
+      // Make briefly visible at display:block to measure, then hide again
+      tip.style.display = "block";
+      const r = tip.getBoundingClientRect();
+      tip.style.display = "";
+
+      // Vertical: flip below card if tooltip goes above viewport top
+      if(r.top < 4) tip.classList.add("flip-down");
+
+      // Horizontal: nudge if centered tooltip overflows left or right edge
+      if(r.right > window.innerWidth - 4) tip.classList.add("nudge-left");
+      else if(r.left < 4)                 tip.classList.add("nudge-right");
+    });
+  });
+  const sectorsEl = document.getElementById("sectors");
+  sectorsEl.innerHTML = "";
+
+  for(const sKey of allKeys) {
+    const items = bySector[sKey];
+    if(!items || items.length === 0) continue;
+
+    const sec = document.createElement("div");
+    sec.className = "sector";
+    sec.innerHTML = `<div class="sector-header">${SECTOR_LABELS[sKey]||sKey}</div><div class="cards"></div>`;
+    const grid = sec.querySelector(".cards");
+
+    for(const r of items) {
+      const s = r.status || "manual";
+      const isManual = s === "manual" || r.value === null;
+      const card = document.createElement("div");
+      card.className = "card" + (s==="alert"?" is-alert":s==="warn"?" is-warn":isManual?" is-manual":"");
+
+      let noteHtml = "";
+      if(r.threshold_note && !isManual) {
+        noteHtml = `<div class="card-note">${r.threshold_note}</div>`;
+      }
+      const contextHtml = (r.context && !isManual)
+        ? `<div class="card-context">${r.context}</div>` : "";
+
+      // Tier badge — only when notes field carries tier framing
+      const tier = inferTier(r.notes);
+      const tierHtml = tier
+        ? `<div class="card-tier">${tier}</div>` : "";
+
+      // Info button + tooltip: scraper notes first, then static knowledge below a divider
+      const scraperText = (r.notes || "").replace(/^Tier\s+\d+\s*[—–-]\s*/i, "").trim();
+      const knowledge = lookupKnowledge(r.indicator);
+      const hasTooltip = scraperText || knowledge;
+
+      let tooltipInner = "";
+      if(scraperText) {
+        tooltipInner += `<div class="tooltip-scraper">${scraperText}</div>`;
+      }
+      if(knowledge) {
+        if(scraperText) tooltipInner += `<hr class="tooltip-divider">`;
+        tooltipInner += `<div class="tooltip-knowledge-title">${knowledge.title}</div>`;
+        tooltipInner += `<div class="tooltip-knowledge-body">${knowledge.body}</div>`;
+      }
+
+      const infoHtml = hasTooltip
+        ? `<div class="card-info-btn" aria-label="Notes">i</div>
+           <div class="card-tooltip">${tooltipInner}</div>` : "";
+
+      card.innerHTML = `
+        <div class="card-dot ${dotClass(s)}"></div>
+        <div class="card-label">${r.indicator}</div>
+        <div class="card-value">${isManual ? "manual" : fmtValue(r)}</div>
+        ${!isManual ? `<div class="card-unit">${r.unit||""}</div>` : ""}
+        ${contextHtml}
+        ${tierHtml}
+        <div class="card-date">${fmtDate(r.data_date)}</div>
+        ${noteHtml}
+        ${infoHtml}`;
+      grid.appendChild(card);
     }
-    print("\n  NETWORK CONNECTIVITY PRE-CHECK\n  " + "-"*54)
-    reachable = {}
-    for host, label in hosts.items():
-        try:
-            import socket as _sock
-            _sock.setdefaulttimeout(5)
-            _sock.getaddrinfo(host, 443)
-            print(f"  ✅ {host:<52} {label}")
-            reachable[host] = True
-        except Exception:
-            print(f"  ❌ {host:<52} {label}  ← UNREACHABLE")
-            reachable[host] = False
-    blocked = [h for h, ok in reachable.items() if not ok]
-    if blocked:
-        print(f"\n  ⚠  {len(blocked)}/{len(hosts)} unreachable. Check network/VPN.\n")
-    else:
-        print(f"\n  ✅ All {len(hosts)} hosts reachable\n")
-    return reachable
+    sectorsEl.appendChild(sec);
+  }
 
-def run_all_scrapers(sector_filter=None, dry_run=False, skip_connectivity_check=False,
-                     print_generators=False):
-    results = []
-    if not skip_connectivity_check:
-        check_network_connectivity()
+  document.getElementById("footer-sources").textContent =
+    "Sources: IESO · Bank of Canada · StatsCan · Toronto Open Data · Environment Canada · data.ontario.ca · open.canada.ca · NAV Canada · Toronto Police ASR · Stooq · Stockr";
+  document.getElementById("footer-run").textContent =
+    `TII v3.1 · scraper run ${rdFull} · auto-refresh every 6 hours`;
+}
 
-    for sector in ([sector_filter] if sector_filter else list(SECTOR_SCRAPERS.keys())):
-        print(f"\n{'='*60}\n  SECTOR: {sector.upper()}\n{'='*60}")
-        for fn in SECTOR_SCRAPERS.get(sector, []):
-            print(f"  → {fn.__name__}...", end=" ", flush=True)
-            try:
-                items = fn()
-                for item in items:
-                    apply_thresholds(item)
-                    s, v, u, n = (item.get(k) for k in ["status","value","unit","indicator"])
-                    tn = item.get("threshold_note","")
-                    if s == "alert":    print(f"\n     🚨 {n}: {v} {u or ''} — {tn}")
-                    elif s == "warn":   print(f"\n     ⚠️  {n}: {v} {u or ''} — {tn}")
-                    elif s == "ok":     print(f"\n     ✅ {n}: {v} {u or ''}")
-                    elif s == "manual": print(f"\n     📋 {n}: requires manual retrieval")
-                    else:               print(f"\n     ❌ {n}: {item.get('notes','')[:100]}")
-                results.extend(items)
-            except Exception as e:
-                import traceback
-                print(f"\n     💥 EXCEPTION: {e}")
-                traceback.print_exc()
-                results.append(_err(fn.__name__, "unknown", "unknown", str(e)))
+function showError(msg) {
+  document.getElementById("loading").style.display = "none";
+  const e = document.getElementById("error-msg");
+  e.style.display = "block";
+  e.textContent = msg;
+}
 
-    print(f"\n{'='*60}\n  MANUAL-ONLY SOURCES\n{'='*60}")
-    manual = get_manual_placeholders()
-    for m in manual:
-        print(f"  📋 {m['indicator']}: {m['source']}")
-    results.extend(manual)
+async function loadData() {
+  try {
+    const res = await fetch(DATA_URL + "?t=" + Date.now(), {
+      cache: "no-store",
+      headers: { "Cache-Control": "no-cache" }
+    });
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    render(data);
+    document.getElementById("error-msg").style.display = "none";
+    document.getElementById("dashboard").style.display = "block";
+  } catch(e) {
+    if(document.getElementById("dashboard").style.display === "none") {
+      showError(`Could not load ${DATA_URL} — ${e.message}. ` +
+        "Place tii_data_latest.json in the same folder as this HTML file, " +
+        "or set DATA_URL to your JSON endpoint.");
+    }
+  }
+}
 
-    ok    = sum(1 for r in results if r.get("status") == "ok")
-    warn  = sum(1 for r in results if r.get("status") == "warn")
-    alert = sum(1 for r in results if r.get("status") == "alert")
-    err   = sum(1 for r in results if r.get("status") == "error")
-    man   = sum(1 for r in results if r.get("status") == "manual")
-    print(f"\n{'='*60}\n  SUMMARY: {ok} ok | {warn} warn | {alert} alert | {err} errors | {man} manual\n{'='*60}")
-
-    # ── Per-generator detail output ──────────────────────────────────────────
-    if _IESO_GENERATOR_CACHE:
-        gens = _IESO_GENERATOR_CACHE.get("generators", [])
-        hour = _IESO_GENERATOR_CACHE.get("hour", "?")
-        count = len(gens)
-
-        if print_generators:
-            print(f"\n{'='*60}")
-            print(f"  ONTARIO GRID — {count} GENERATORS  (Hour {hour})")
-            print(f"{'='*60}")
-            # Group by fuel for readability
-            by_fuel = defaultdict(list)
-            for g in gens:
-                by_fuel[g["fuel"]].append(g)
-            for fuel in sorted(by_fuel):
-                fuel_mw = sum(g["output_mw"] or 0 for g in by_fuel[fuel])
-                print(f"\n  ── {fuel} ({len(by_fuel[fuel])} units, {fuel_mw:.0f} MW total) ──")
-                for g in sorted(by_fuel[fuel],
-                                key=lambda x: x["output_mw"] if x["output_mw"] is not None else -1,
-                                reverse=True):
-                    mw_str  = f"{g['output_mw']:>8.1f} MW" if g['output_mw'] is not None else "       N/A"
-                    cap_str = f"/ {g['capacity_mw']:.1f} cap" if g['capacity_mw'] else ""
-                    print(f"    {g['name']:<45} {mw_str} {cap_str}")
-
-    if not dry_run:
-        today_str = date.today().strftime("%Y%m%d")
-        output = {"run_timestamp": datetime.utcnow().isoformat() + "Z",
-                  "run_date": str(date.today()), "sector_filter": sector_filter,
-                  "totals": {"ok": ok, "warn": warn, "alert": alert,
-                             "error": err, "manual": man},
-                  "results": results}
-        if _IESO_GENERATOR_CACHE:
-            output["ieso_generators"] = _IESO_GENERATOR_CACHE
-        for path in [f"tii_data_{today_str}.json", "tii_data_latest.json"]:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(output, f, indent=2, ensure_ascii=False)
-            gen_note = (f", {len(_IESO_GENERATOR_CACHE.get('generators', []))} generators"
-                        if _IESO_GENERATOR_CACHE else "")
-            print(f"  Output written to: {path}{gen_note}")
-
-    return results
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="TII Data Scraper v2.9",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-INSTALL:  pip install requests beautifulsoup4 openpyxl
-          (lxml optional — no longer required for IESO XML)
-
-USAGE:    python tii_scraper.py                        # run all
-          python tii_scraper.py --check-network        # network check only
-          python tii_scraper.py --sector energy        # one sector
-          python tii_scraper.py --dry-run              # print, no JSON
-          python tii_scraper.py --no-connectivity-check # faster
-          python tii_scraper.py --generators           # print per-generator detail to console
-
-OUTPUT FILES (written each run):
-          tii_data_YYYYMMDD.json   — all TII indicators + generator detail (single file)
-          tii_data_latest.json     — same, always overwritten
-          JSON structure: { run_timestamp, results: [...], ieso_generators: { generators: [...] } }
-        """)
-    parser.add_argument("--sector", choices=list(SECTOR_SCRAPERS.keys()), default=None)
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--check-network", action="store_true")
-    parser.add_argument("--no-connectivity-check", action="store_true")
-    parser.add_argument("--generators", action="store_true",
-                        help="Print per-generator breakdown to console after run")
-    args = parser.parse_args()
-    if args.check_network:
-        check_network_connectivity(); sys.exit(0)
-    run_all_scrapers(sector_filter=args.sector, dry_run=args.dry_run,
-                     skip_connectivity_check=args.no_connectivity_check,
-                     print_generators=args.generators)
+loadData();
+</script>
+</body>
+</html>
