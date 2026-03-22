@@ -31,7 +31,7 @@ import json
 import re
 import sys
 import xml.etree.ElementTree as ET
-from collections import Counter, defaultdict, defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, date, timedelta
 from pathlib import Path
 
@@ -339,10 +339,23 @@ def fetch_ieso_generation_mix():
     })
 
     total_mw = sum(fuel_totals.values())
-    data_date = f"{day_str} Hour {latest_hour}" if day_str else f"{date.today()} Hour {latest_hour}"
+    # data_date: store ISO date only; hour goes in notes so fmtDate renders cleanly
+    data_date = day_str if day_str else str(date.today())
+    hour_note = f"Hour ending {latest_hour:02d}:00 UTC."
+    fuel_summary = ", ".join(f"{k}: {round(v)}MW" for k, v in
+                             sorted(fuel_totals.items(), key=lambda x: x[1], reverse=True))
     results = [_ok("Total Generation (MW)", round(total_mw, 1), "MW",
                    "IESO GenOutputbyFuelHourly", url, data_date,
-                   f"Hour {latest_hour}. Fuel mix: {fuel_totals}")]
+                   f"Tier 3 — Local real-time delivery. {hour_note} "
+                   f"Mix: {fuel_summary}. "
+                   f"Chain terminus: Brent/NGAS (Tier 1) → TCPL utilization (Tier 2) → "
+                   f"IESO dispatch / pump price (Tier 3).")]
+    GAS_NOTE = (
+        "Tier 3 — Local real-time delivery. Gas peakers are marginal-cost units dispatched "
+        "when baseload (nuclear/hydro) is insufficient. Output >3,000 MW = demand stress; "
+        ">5,000 MW = grid under significant pressure. Elevated gas dispatch correlates with "
+        "higher wholesale electricity prices and increased exposure to Tier 1/2 commodity risk."
+    )
     for key, (name, unit) in {
         "NUCLEAR": ("Nuclear Output (MW)", "MW"),
         "HYDRO":   ("Hydro Output (MW)",   "MW"),
@@ -351,8 +364,9 @@ def fetch_ieso_generation_mix():
         "SOLAR":   ("Solar Output (MW)",   "MW"),
         "BIOFUEL": ("Biofuel Output (MW)", "MW"),
     }.items():
+        notes = (GAS_NOTE + f" {hour_note}") if key == "GAS" else hour_note
         results.append(_ok(name, round(fuel_totals.get(key, 0), 1), unit,
-                           "IESO GenOutputbyFuelHourly", url, data_date))
+                           "IESO GenOutputbyFuelHourly", url, data_date, notes))
     return results
 
 
@@ -421,36 +435,79 @@ def fetch_ieso_ontario_demand():
 
 def fetch_brent_crude():
     """
-    Brent crude spot price — ICE Brent futures via Stooq.com.
-    Source: stooq.com (Polish financial data, no API key, no US jurisdiction).
-    Ticker: cb.f (Crude Oil Brent, ICE).
-    Brent is the global benchmark pricing ~2/3 of world oil trade.
-    Ontario fuel prices track: Brent → CAD/USD → refinery margin → pump price.
-    Warn: >$80/bbl. Alert: >$100/bbl (Hormuz disruption threshold).
+    Brent crude spot price.
+
+    TIER POSITION: Tier 1 — Global commodity layer.
+    Brent is the first link in the Ontario energy supply chain:
+      Tier 1 → Brent crude (global commodity benchmark, set by ICE/OPEC dynamics)
+      Tier 2 → TCPL pipeline utilization (continental delivery infrastructure)
+      Tier 3 → Toronto pump price / IESO gas peaker dispatch (local real-time delivery)
+
+    Sources tried in order:
+      1. FRED (St. Louis Fed) — DCOILBRENTEU series. Daily ICE Brent spot price in USD/bbl.
+         No API key required. ~1 business day lag. Highly reliable US government data service.
+      2. Stooq.com — cb.f (ICE Brent front-month futures). No API key, non-US jurisdiction.
+      3. Stooq.com — lco.f (alternate ICE Brent ticker).
     """
-    url = "https://stooq.com/q/d/l/?s=cb.f&i=d&l=5"
+    NOTES_TEMPLATE = (
+        "Tier 1 — Global commodity. ICE Brent crude: global benchmark for ~2/3 of world oil trade. "
+        "Ontario supply chain: Brent (Tier 1) → TCPL pipeline utilization (Tier 2) → "
+        "Toronto pump price / IESO gas dispatch (Tier 3). "
+        "CAD/USD amplifies or dampens pass-through to Ontario consumers. "
+        "Warn >$80/bbl (refinery margin pressure), Alert >$100/bbl (Hormuz disruption threshold). "
+        "Source: {source}."
+    )
+
+    # ── Source 1: FRED DCOILBRENTEU ───────────────────────────────────────────
+    # CSV endpoint — no API key, returns full history, last row = most recent business day
+    fred_url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DCOILBRENTEU"
     try:
-        r = SESSION.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=TIMEOUT)
+        r = SESSION.get(fred_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=TIMEOUT)
         r.raise_for_status()
         lines = r.text.strip().splitlines()
-        if len(lines) < 2:
-            raise ValueError("No data rows returned from Stooq")
+        # Header: DATE,DCOILBRENTEU
+        # Rows: 1987-05-20,18.63  — missing values shown as "."
         for row in reversed(lines[1:]):
             parts = row.split(",")
-            if len(parts) >= 5 and parts[4].strip() not in ("", "null", "N/D"):
+            if len(parts) == 2 and parts[1].strip() not in ("", ".", "N/D"):
                 date_str = parts[0].strip()
-                price = round(float(parts[4].strip()), 2)
-                notes = (
-                    "ICE Brent crude spot price. Global benchmark for ~2/3 of world oil trade. "
-                    "Ontario fuel prices track: Brent → CAD/USD → pump price. "
-                    "Source: Stooq.com (ICE futures, ticker cb.f). "
-                    "Warn >$80/bbl, Alert >$100/bbl (Hormuz disruption threshold)."
-                )
+                price = round(float(parts[1].strip()), 2)
                 return [_ok("Brent Crude Price", price, "USD/bbl",
-                            "Stooq.com — ICE Brent (cb.f)", url, date_str, notes)]
-        raise ValueError("All rows have null close price")
+                            "FRED — DCOILBRENTEU (St. Louis Fed)", fred_url, date_str,
+                            NOTES_TEMPLATE.format(source="FRED DCOILBRENTEU — St. Louis Federal Reserve, daily ICE Brent spot price"))]
     except Exception as e:
-        return [_err("Brent Crude Price", "Stooq.com — ICE Brent", url, str(e))]
+        fred_error = str(e)
+    else:
+        fred_error = "All FRED rows missing/null"
+
+    # ── Source 2 & 3: Stooq CSV fallback ─────────────────────────────────────
+    stooq_candidates = [
+        ("cb.f",  "https://stooq.com/q/d/l/?s=cb.f&i=d&l=5"),
+        ("lco.f", "https://stooq.com/q/d/l/?s=lco.f&i=d&l=5"),
+    ]
+    last_error = f"FRED failed ({fred_error}); Stooq also failed"
+    for ticker, url in stooq_candidates:
+        try:
+            r = SESSION.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=TIMEOUT)
+            r.raise_for_status()
+            lines = r.text.strip().splitlines()
+            if len(lines) < 2:
+                last_error = f"FRED failed; {ticker}: fewer than 2 lines"
+                continue
+            for row in reversed(lines[1:]):
+                parts = row.split(",")
+                if len(parts) >= 5 and parts[4].strip() not in ("", "null", "N/D"):
+                    date_str = parts[0].strip()
+                    price = round(float(parts[4].strip()), 2)
+                    return [_ok("Brent Crude Price", price, "USD/bbl",
+                                f"Stooq.com — ICE Brent ({ticker})", url, date_str,
+                                NOTES_TEMPLATE.format(source=f"Stooq.com ICE Brent futures ({ticker})"))]
+            last_error = f"FRED failed; {ticker}: all rows null/N/D"
+        except Exception as e:
+            last_error = f"FRED failed ({fred_error}); {ticker}: {e}"
+            continue
+
+    return [_err("Brent Crude Price", "FRED / Stooq.com", fred_url, last_error)]
 
 
 def fetch_toronto_shelter():
@@ -937,11 +994,24 @@ def fetch_tcpl_mainline():
                 avg_util = util
                 avg_note = ""
 
-            notes = (f"Throughput: {thr:,.0f} / Capacity: {cap:,.0f} (1000 m³/day). "
+            tier_context = (
+                "Tier 2 — Continental supply chain. "
+                "TCPL Mainline moves western Canadian gas east across Ontario. "
+                "Elevated utilization here precedes Tier 3 stress (IESO gas peaker dispatch, "
+                "Toronto pump price) by days to weeks. "
+                "Chain: Brent/NGAS (Tier 1) → TCPL utilization (Tier 2) → "
+                "IESO gas output / pump price (Tier 3). "
+            ) if "Parkway" in label else (
+                "Tier 2 — Continental supply chain. "
+                "Northern Ontario Line transits gas from western fields toward Parkway/GTA. "
+                "Upstream constraint here feeds into Parkway pressure before reaching "
+                "Toronto-area consumers and IESO gas peakers (Tier 3). "
+            )
+            notes = (f"{tier_context}"
+                     f"Throughput: {thr:,.0f} / Capacity: {cap:,.0f} (1000 m³/day). "
                      f"Utilization: {util}%.{avg_note} "
-                     f"Normal range 50-80%. Above 85% = pipeline near capacity. "
+                     f"Normal range 50-80%. Warn >85% (near capacity), Alert >95% (emergency risk). "
                      f"⚠ Data lag: CER publishes quarterly (~3 month lag). "
-                     f"Current data reflects Dec 2025. "
                      f"Source: CER open data (TransCanada Mainline throughput CSV).")
 
             results.append(_ok(f"TCPL {label}", util, "% utilized",
@@ -1420,7 +1490,8 @@ def fetch_bank_of_canada_rate():
             rate = float(rate_str)
             return [_ok("Bank of Canada Policy Rate", rate, "%",
                         f"Bank of Canada Valet API ({series})", url, latest["d"],
-                        f"Overnight target rate. Current: 2.25% (held Oct 2025).")]
+                        f"Overnight target rate as of {latest['d']}. "
+                        f"Alert threshold: sustained rise signals tightening credit conditions.")]
         except (requests.RequestException, json.JSONDecodeError, KeyError,
                 ValueError, TypeError):
             continue
@@ -1544,10 +1615,12 @@ def fetch_toronto_fuel_price():
         tomorrow_note = (f" Tomorrow: {tomorrow_price}¢/L ({tomorrow_date})."
                          if tomorrow_price else "")
         notes = (
-            f"Regular unleaded, includes all taxes. Daily forecast from commodity markets."
-            f"{tomorrow_note} "
+            f"Tier 3 — Local real-time delivery. Regular unleaded, includes all taxes. "
+            f"Daily forecast from commodity markets.{tomorrow_note} "
+            f"Supply chain: Brent crude (Tier 1) → TCPL pipeline utilization (Tier 2) → "
+            f"Toronto pump price (Tier 3). CAD/USD rate amplifies or dampens pass-through. "
             f"Source: stockr.net (Canadian, daily at 11am). "
-            f"Tracks: global crude → CAD/USD → pump price chain."
+            f"Warn >150¢/L, Alert >185¢/L."
         )
         return [_ok("Fuel Price — Toronto", today_price, "¢/L",
                     "Stockr.net — daily Toronto pump price", url,
@@ -1964,7 +2037,7 @@ def fetch_tps_staffing_by_command():
             },
         ]
     except Exception as e:
-        return [{"indicator": "TPS Uniform Fill Rate", "value": None, "error": str(e), "sector": "public_safety"}]
+        return [_err("TPS Uniform Fill Rate", "Toronto Police Staffing by Command", url, str(e))]
 
 
 # ORCHESTRATOR
@@ -2081,7 +2154,6 @@ def run_all_scrapers(sector_filter=None, dry_run=False, skip_connectivity_check=
             print(f"  ONTARIO GRID — {count} GENERATORS  (Hour {hour})")
             print(f"{'='*60}")
             # Group by fuel for readability
-            from collections import defaultdict
             by_fuel = defaultdict(list)
             for g in gens:
                 by_fuel[g["fuel"]].append(g)
@@ -2116,7 +2188,7 @@ def run_all_scrapers(sector_filter=None, dry_run=False, skip_connectivity_check=
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="TII Data Scraper v2.0",
+        description="TII Data Scraper v2.9",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 INSTALL:  pip install requests beautifulsoup4 openpyxl
