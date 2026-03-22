@@ -2140,31 +2140,33 @@ def fetch_tps_personnel():
 
         return [
             {
-                "name": "TPS Sworn Officers",
+                "indicator": "TPS Sworn Officers",
                 "value": u,
                 "unit": "officers",
-                "year": latest,
+                "data_date": latest,
                 "context": yoy_str,
                 "source": "Toronto Police ASR — Personnel by Rank",
-                "note": (
+                "notes": (
                     f"Total TPS strength {total:,} ({sworn_pct}% sworn). "
                     f"Includes {c:,} civilian staff. Data lag: ~1 year."
                 ),
                 "sector": "public_safety",
+                "status": "ok",
             },
             {
-                "name": "TPS Civilian Staff",
+                "indicator": "TPS Civilian Staff",
                 "value": c,
                 "unit": "staff",
-                "year": latest,
+                "data_date": latest,
                 "context": f"{o} 'Other Staff' (auxiliary, cadets, crossing guards) not included",
                 "source": "Toronto Police ASR — Personnel by Rank",
-                "note": "Civilian staff includes administrative, IT, communications, legal support.",
+                "notes": "Civilian staff includes administrative, IT, communications, legal support.",
                 "sector": "public_safety",
+                "status": "ok",
             },
         ]
     except Exception as e:
-        return [{"name": "TPS Sworn Officers", "value": None, "error": str(e), "sector": "public_safety"}]
+        return [_err("TPS Sworn Officers", "Toronto Police ASR", url, str(e))]
 
 
 def fetch_tps_staffing_by_command():
@@ -2233,48 +2235,51 @@ def fetch_tps_staffing_by_command():
 
         return [
             {
-                "name": "TPS Uniform Fill Rate",
+                "indicator": "TPS Uniform Fill Rate",
                 "value": fill_pct,
                 "unit": "%",
-                "year": latest,
+                "data_date": latest,
                 "context": gap_str,
                 "source": "Toronto Police Staffing by Command",
-                "note": (
+                "notes": (
                     f"Actual {actual_total:,} uniform officers vs {approved_total:,} authorized. "
                     f">100% means staffed above authorized complement. Data lag: ~1 year."
                 ),
                 "sector": "public_safety",
+                "status": "ok",
             },
             {
-                "name": "TPS Community Safety Command Share",
+                "indicator": "TPS Community Safety Command Share",
                 "value": csc_pct,
                 "unit": "% of uniform",
-                "year": latest,
+                "data_date": latest,
                 "context": f"{csc:,} of {actual_total:,} uniform officers",
                 "source": "Toronto Police Staffing by Command",
-                "note": (
+                "notes": (
                     "Community Safety Command covers divisional policing (neighbourhood officers). "
                     "Declining share since 2016 (76.6% → 68.8%). Data lag: ~1 year."
                 ),
                 "sector": "public_safety",
+                "status": "ok",
             },
             {
-                "name": "TPS Specialized Operations Command Share",
+                "indicator": "TPS Specialized Operations Command Share",
                 "value": soc_pct,
                 "unit": "% of uniform",
-                "year": latest,
+                "data_date": latest,
                 "context": f"{soc:,} of {actual_total:,} uniform officers",
                 "source": "Toronto Police Staffing by Command",
-                "note": (
+                "notes": (
                     "Specialized Operations Command includes Emergency Task Force, "
                     "Intelligence, Guns & Gangs, Major Crime. "
                     "Rising share since 2016 (~14% → 19%). Data lag: ~1 year."
                 ),
                 "sector": "public_safety",
+                "status": "ok",
             },
         ]
     except Exception as e:
-        return [{"name": "TPS Uniform Fill Rate", "value": None, "error": str(e), "sector": "public_safety"}]
+        return [{"indicator": "TPS Uniform Fill Rate", "value": None, "error": str(e), "sector": "public_safety"}]
 
 
 # ORCHESTRATOR
