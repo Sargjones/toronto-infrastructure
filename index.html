@@ -213,7 +213,7 @@
     position: absolute;
     bottom: calc(100% + 6px);
     right: -6px;
-    width: 240px;
+    width: 260px;
     background: var(--surface);
     border: 0.5px solid var(--border2);
     border-radius: 8px;
@@ -223,6 +223,21 @@
     z-index: 100;
     pointer-events: none;
     white-space: normal;
+  }
+  .tooltip-scraper {
+    color: var(--text2);
+  }
+  .tooltip-divider {
+    border: none;
+    border-top: 0.5px solid var(--border);
+    margin: 7px 0;
+  }
+  .tooltip-knowledge-title {
+    font-weight: 600; color: var(--text1);
+    margin-bottom: 3px; font-size: 11px;
+  }
+  .tooltip-knowledge-body {
+    color: var(--text2);
   }
   /* Flip to below the card if it's in the top half of the viewport */
   .card-tooltip.flip-down {
@@ -347,6 +362,329 @@ const SECTOR_LABELS = {
   environment:"Environment", financial:"Financial",
   public_safety:"Public Safety & Cost"
 };
+
+// ── Static knowledge layer ────────────────────────────────────────────────
+// Keyed by lowercase substring of indicator name.
+// Each entry: { title, body } — title is bolded, body is plain text.
+// Matched by first key found in the indicator name (most specific first).
+const CARD_KNOWLEDGE = {
+
+  // ENERGY — generation sources
+  "nuclear output": {
+    title: "Ontario nuclear fleet",
+    body: "Three stations supply ~55% of Ontario's electricity. " +
+          "Darlington (Clarington, on Lake Ontario): 4 CANDU reactors, 3,512 MW capacity — currently undergoing refurbishment unit by unit through 2026. " +
+          "Bruce (Kincardine, on Lake Huron): 8 CANDU reactors in two stations, 6,232 MW — largest operating nuclear facility in the Western Hemisphere. " +
+          "Pickering (Pickering, on Lake Ontario): 4 of 8 original CANDU units still operating, ~2,000 MW — licensed to run until 2026, with debate over further extension. " +
+          "CANDU reactors use heavy water and natural uranium, allowing refuelling while online."
+  },
+  "hydro output": {
+    title: "Ontario hydroelectric system",
+    body: "Hydro contributes ~24% of Ontario generation and is the primary dispatchable clean source. " +
+          "Niagara: Sir Adam Beck 1 & 2 (Queenston) plus Sir Adam Beck Pump Generating Station — combined ~1,800 MW. Water flow governed by the International Joint Commission treaty with the US. " +
+          "Ottawa River: Chats Falls, Barrett Chute, and others operated by OPG and Hydro-Ottawa. " +
+          "Northern Ontario: dozens of run-of-river stations on the Mattagami, Abitibi, Mississagi, and other rivers. " +
+          "Total Ontario hydro capacity: ~8,000 MW (including contracted private). Output varies significantly with precipitation and seasonal snowmelt."
+  },
+  "gas output": {
+    title: "Ontario gas peaker fleet",
+    body: "Natural gas plants are marginal-cost: they run only when baseload (nuclear + hydro) cannot meet demand, making gas output the primary real-time demand stress signal. " +
+          "Major stations: Lennox (Napanee area, 2,100 MW oil/gas, rarely dispatched), Portlands Energy Centre (Toronto waterfront, 550 MW combined-cycle), Goreway (Brampton, 875 MW), York Energy Centre (Vaughan, 393 MW), Halton Hills (400 MW). " +
+          "Many smaller peakers (50-200 MW) across the grid. " +
+          "Elevated gas dispatch raises wholesale electricity prices under the HOEP (Hourly Ontario Energy Price) and signals that cold snaps, heat waves, or baseload outages are stressing the system. " +
+          "Ontario is phasing out gas generation by 2030-32 under provincial policy, though the timeline is under review."
+  },
+  "wind output": {
+    title: "Ontario wind generation",
+    body: "Ontario has ~5,600 MW of installed wind capacity, mostly contracted under the FIT and LRP programs. " +
+          "Primary regions: Bruce Peninsula and Lake Huron shoreline (strongest consistent winds), Prince Edward County, Amaranth/Shelburne area, and scattered eastern Ontario sites. " +
+          "Wind output is non-dispatchable and variable — IESO forecasts and curtails wind when the grid cannot absorb it (spill). " +
+          "Ontario frequently exports surplus wind generation to Quebec, Michigan, and New York overnight."
+  },
+  "solar output": {
+    title: "Ontario solar generation",
+    body: "Ontario has ~4,300 MW of installed solar capacity — predominantly small rooftop and ground-mount systems contracted under the FIT microFIT programs. " +
+          "Output is highly variable by season and time of day: peaks mid-afternoon in summer, near-zero in winter evenings. " +
+          "The large Sarnia Photovoltaic Power Plant (~80 MW) was the world's largest solar farm at its 2010 opening. " +
+          "Solar contributes to midday demand reduction but does not help with evening peak or winter morning load."
+  },
+  "biofuel output": {
+    title: "Ontario bioenergy generation",
+    body: "A small but dispatchable segment of the Ontario grid. " +
+          "Sources include landfill gas (multiple sites), biomass combustion (Atikokan Generating Station converted from coal in 2014, 205 MW), and biogas from wastewater treatment. " +
+          "Bioenergy is valued for dispatchability — it can be scheduled unlike wind and solar. " +
+          "Atikokan in northwestern Ontario is Canada's largest biomass power plant by capacity."
+  },
+  "total generation": {
+    title: "Ontario grid total output",
+    body: "The sum of all fuel sources dispatched by IESO in a given hour. " +
+          "Ontario's grid is operated by IESO (Independent Electricity System Operator), which balances supply and demand in real time across ~100 generators. " +
+          "Ontario is a net exporter most hours, sending surplus power to Quebec, Manitoba, Michigan, New York, and Minnesota via interconnections. " +
+          "Annual generation is roughly 140-150 TWh. Peak demand typically occurs on hot summer weekday afternoons (July-August) and cold winter mornings (January-February)."
+  },
+  "peak demand": {
+    title: "Ontario demand index",
+    body: "Measures current Ontario-wide electricity consumption relative to the 2024 annual peak (~25,000 MW). " +
+          "Demand is served by Ontario generators plus net imports from Quebec and US states. " +
+          "IESO publishes a reliability outlook quarterly — reserve margin (supply above peak requirement) is the key long-term adequacy metric. " +
+          "Demand response programs allow large industrial users (smelters, auto plants) to shed load during supply emergencies in exchange for rate credits."
+  },
+  "ontario demand": {
+    title: "Ontario real-time demand",
+    body: "Total metered consumption across the Ontario grid in MW. " +
+          "Excludes losses and self-generation (e.g. industrial cogen). " +
+          "The IESO publishes this in near-real-time via the Ontario Demand Multiday file, updated hourly. " +
+          "Seasonal baseline: winter peak ~19,000-21,000 MW on cold mornings; summer peak ~22,000-25,000 MW on hot afternoons; overnight minimum ~12,000-14,000 MW."
+  },
+
+  // ENERGY — supply chain
+  "tcpl parkway": {
+    title: "Eastern Triangle — Parkway Receipts",
+    body: "The Parkway hub (near Milton, ON) is the primary gas delivery point for the Greater Toronto Area and eastern Ontario. " +
+          "Gas arrives here via TC Energy's Mainline from western Canadian fields (Alberta and BC), having transited the Northern Ontario Line. " +
+          "Union Gas (now Enbridge Gas) distributes from Parkway to residential and commercial users across the GTA. " +
+          "The Dawn Hub (near Sarnia) is the main southwestern Ontario storage and trading point; Dawn-to-Parkway flow supplements Mainline receipts during peak demand. " +
+          "High Parkway utilization means supply is tight at Toronto's gas entry point — a precursor to price spikes and potential curtailment of interruptible industrial users."
+  },
+  "northern ontario line": {
+    title: "TCPL Northern Ontario Line",
+    body: "The Northern Ontario Line (NOL) is the segment of TC Energy's Mainline that crosses northern Ontario from the Manitoba border to the Parkway area. " +
+          "It is the main trunk through which western Canadian gas reaches Toronto and eastern Canada. " +
+          "Capacity: approximately 4,400 MMcf/day at peak. " +
+          "Constraint on the NOL restricts all downstream supply, including Parkway receipts and ultimately Toronto pump prices. " +
+          "The NOL also serves as a transit route for gas flowing onward to Quebec and the Maritimes via other interconnects."
+  },
+  "brent crude": {
+    title: "ICE Brent crude benchmark",
+    body: "Brent is priced at the Sullom Voe terminal in the Shetland Islands and reflects North Sea crude blends. " +
+          "It prices approximately 2/3 of globally traded oil. WTI (West Texas Intermediate) is the North American benchmark and typically trades $2-5/bbl below Brent. " +
+          "Ontario refineries (Imperial Oil Sarnia, Shell Sarnia) process a mix of western Canadian heavy crude and imported light crude. " +
+          "Pump price transmission lag: a $10/bbl move in Brent takes roughly 2-3 weeks to fully appear at Ontario pumps, filtered through refinery runs, wholesale rack prices, and retailer margins. " +
+          "The CAD/USD exchange rate amplifies moves — a weaker loonie makes every barrel more expensive in Canadian dollars."
+  },
+
+  // WATER
+  "water outage": {
+    title: "Toronto water distribution network",
+    body: "Toronto Water operates ~6,000 km of water mains ranging from 19th-century cast iron to modern ductile iron and PVC. " +
+          "Average age of the network is over 40 years; the oldest mains in the downtown core date to the 1880s. " +
+          "Approximately 1,200-1,500 watermain breaks occur annually — the majority in winter due to frost heave and temperature cycling. " +
+          "Breaks are categorized as emergency (unplanned service interruption) or planned (maintenance with advance notice). " +
+          "Toronto Water targets 15-20 km of watermain replacement per year under its capital plan."
+  },
+  "watermain break": {
+    title: "Toronto watermain breaks",
+    body: "Toronto Water operates ~6,000 km of water mains ranging from 19th-century cast iron to modern ductile iron and PVC. " +
+          "Average age of the network is over 40 years; the oldest mains in the downtown core date to the 1880s. " +
+          "Approximately 1,200-1,500 breaks occur annually — the majority in winter due to frost heave and temperature cycling. " +
+          "Toronto Water targets 15-20 km of watermain replacement per year under its capital plan."
+  },
+  "boil water": {
+    title: "Toronto drinking water system",
+    body: "Toronto operates four water treatment plants serving ~4 million people. " +
+          "R.C. Harris (The Beach, opened 1941): capacity 950 ML/day, serves the east end and downtown — one of the most architecturally significant water treatment plants in North America. " +
+          "F.J. Horgan (Scarborough): capacity 1,140 ML/day, largest plant, serves Scarborough and northeast Toronto. " +
+          "R.L. Clark (Etobicoke): capacity 950 ML/day, serves west Toronto and Etobicoke. " +
+          "Island (Toronto Islands): capacity 190 ML/day, serves downtown and the islands. " +
+          "All four draw from Lake Ontario. Toronto's water consistently meets or exceeds Ontario Drinking Water Quality Standards. " +
+          "A boil water advisory in this system is a rare and significant public health event."
+  },
+  "shelter occupancy": {
+    title: "Toronto shelter system",
+    body: "Toronto funds and operates the largest municipal shelter system in Canada, with capacity across ~70 sites for families, singles, youth, and Indigenous-specific programs. " +
+          "The 4am occupancy snapshot is the standard daily measure — it captures the overnight low, after late arrivals and before morning departures. " +
+          "System capacity fluctuates with seasonal hotel conversions and modular/temporary sites. " +
+          "Occupancy above 95% is the City's threshold for declaring shelter capacity pressure and activating the Warming Centre protocol in winter. " +
+          "Demand drivers include housing unaffordability, mental health and addictions, and refugee claimant arrivals."
+  },
+  "shelter system capacity": {
+    title: "Toronto shelter system",
+    body: "Toronto funds and operates the largest municipal shelter system in Canada, with capacity across ~70 sites for families, singles, youth, and Indigenous-specific programs. " +
+          "The 4am occupancy snapshot is the standard daily measure — it captures the overnight low, after late arrivals and before morning departures. " +
+          "System capacity fluctuates with seasonal hotel conversions and modular/temporary sites. " +
+          "Occupancy above 95% is the City's threshold for declaring shelter capacity pressure and activating the Warming Centre protocol in winter."
+  },
+
+  // HEALTH
+  "aqhi": {
+    title: "Air Quality Health Index (AQHI)",
+    body: "The AQHI was developed jointly by Health Canada and Environment Canada and replaced the older Air Quality Index in Ontario in 2015. " +
+          "Scale: 1-3 Low Risk (most people can be active outdoors), 4-6 Moderate Risk (sensitive individuals should reduce prolonged outdoor exertion), 7-10 High Risk (general population should reduce strenuous outdoor activity), 10+ Very High Risk (avoid outdoor exertion). " +
+          "The index combines ground-level ozone (O3), nitrogen dioxide (NO2), and fine particulate matter (PM2.5). " +
+          "Toronto monitoring sites: Etobicoke North, Toronto West, Toronto East, and Oshawa (as regional reference). " +
+          "Summer smog events typically involve ozone from vehicle emissions baking in heat; winter events more often involve particulate from wood burning and traffic."
+  },
+  "air quality": {
+    title: "Air Quality Health Index (AQHI)",
+    body: "The AQHI was developed jointly by Health Canada and Environment Canada and replaced the older Air Quality Index in Ontario in 2015. " +
+          "Scale: 1-3 Low Risk, 4-6 Moderate Risk (sensitive individuals reduce exertion), 7-10 High Risk (general population reduce strenuous activity), 10+ Very High Risk. " +
+          "The index combines ground-level ozone (O3), nitrogen dioxide (NO2), and fine particulate matter (PM2.5). " +
+          "Summer smog events typically involve ozone from vehicle emissions; winter events more often involve particulate from wood burning and traffic."
+  },
+  "wastewater": {
+    title: "Wastewater virus surveillance",
+    body: "PHAC's national wastewater surveillance program detects viral RNA fragments in sewage — a leading indicator of community infection levels that does not depend on clinical testing rates. " +
+          "Toronto is served by three major treatment plants: Ashbridges Bay (capacity 818 ML/day, largest in Canada, serves most of the old City of Toronto and inner suburbs), Humber (capacity 473 ML/day, serves Etobicoke and northwest Toronto), and Highland Creek (capacity 98 ML/day, serves northeast Scarborough). " +
+          "Together Ashbridges Bay and Humber monitor approximately 73% of Toronto's sewershed population. " +
+          "Signal levels: Low (background), Moderate (community transmission ongoing), High (significant active transmission). Typically leads clinical case counts by 4-7 days."
+  },
+  "icu": {
+    title: "Ontario ICU system",
+    body: "Ontario's critical care system is coordinated by the Critical Care Services Ontario (CCSO) network. " +
+          "Total ICU capacity across Ontario: approximately 2,100 adult beds in normal operations, expandable to ~3,500 under surge protocols. " +
+          "Major Toronto critical care centres: Toronto General (UHN), St. Michael's (Unity Health), Sunnybrook, SickKids (pediatric), and Mount Sinai. " +
+          "Ontario typically operates at 80-90% ICU occupancy year-round due to chronic understaffing and bed constraints — leaving limited surge capacity. " +
+          "The COVID-era public dataset was discontinued November 14, 2024; current data is available only through CCSO to authorized users."
+  },
+  "er capacity": {
+    title: "Ontario emergency department system",
+    body: "Ontario has approximately 150 emergency departments, coordinated through the Health Quality Ontario wait time reporting system. " +
+          "Key benchmarks: high-acuity patients (CTAS 1-2) should be seen within 15-30 minutes; admitted patients should be transferred to a ward bed within 8 hours. " +
+          "Toronto's major trauma and tertiary EDs: Toronto General, St. Michael's, Sunnybrook (Level 1 trauma centre), and Toronto Western. " +
+          "Hallway medicine — patients in hospital corridors awaiting inpatient beds — has been a persistent Ontario structural issue since at least 2017. " +
+          "Publicly reported wait time data is available through Health Quality Ontario but is not available as a downloadable dataset."
+  },
+
+  // FINANCIAL
+  "bank of canada": {
+    title: "Bank of Canada policy rate",
+    body: "The overnight rate is the interest rate at which major financial institutions borrow and lend one-day funds among themselves. " +
+          "The Bank of Canada sets a target for this rate at eight fixed announcement dates per year. " +
+          "Transmission mechanism: the overnight rate influences prime rate (typically overnight + 2.2%), which directly sets variable-rate mortgages, HELOCs, and many business loans. " +
+          "Fixed mortgage rates follow Government of Canada bond yields, which respond to — but are not set by — the overnight rate. " +
+          "Toronto housing affordability is acutely sensitive: a 1% rate increase on a $900,000 variable mortgage adds roughly $750/month to carrying costs. " +
+          "The BoC's dual mandate is price stability (2% CPI target) and maximum sustainable employment."
+  },
+  "cad/usd": {
+    title: "Canadian dollar exchange rate",
+    body: "Canada exports ~75% of its goods to the United States, making the CAD/USD rate a core economic indicator. " +
+          "A weaker CAD (higher number, e.g. 1.45 means $1 USD = $1.45 CAD) raises costs for imported goods, amplifies oil price increases at the pump, and increases debt servicing costs for USD-denominated borrowing. " +
+          "Drivers of CAD weakness: lower oil prices (Canada is a major oil exporter), Bank of Canada rate cuts relative to the Fed, global risk-off sentiment, and US tariff threats. " +
+          "Historical context: CAD traded near parity in 2011-2013 (oil boom); fell to ~1.46 in early 2016 (oil price collapse); reached ~1.45 in early 2025 amid tariff concerns. " +
+          "The Bank of Canada publishes the official daily closing rate at 16:30 ET on business days."
+  },
+  "fuel price": {
+    title: "Toronto retail gasoline price",
+    body: "Toronto pump prices reflect: Brent crude (global benchmark) converted to CAD, plus refinery processing margin, plus wholesale distribution margin, plus federal excise tax (10 cents/L), plus Ontario fuel tax (14.7 cents/L), plus federal carbon tax (currently suspended), plus HST (13%). " +
+          "Taxes and fixed costs represent roughly 35-45 cents/L regardless of crude price. " +
+          "The Toronto market is served primarily by Imperial Oil (Sarnia refinery), Shell (Sarnia), and Suncor (Edmonton/Sarnia blend). " +
+          "Stockr.net forecasts daily prices from commodity market movements — this is a calculated forecast, not crowd-sourced. " +
+          "GasBuddy and other crowd-sourced sites track actual posted prices at individual stations, which can vary 5-10 cents/L across Toronto on the same day."
+  },
+  "unemployment": {
+    title: "Toronto CMA unemployment rate",
+    body: "The Toronto CMA (Census Metropolitan Area) covers Toronto, Peel, York, Durham, and Halton regions — approximately 6.6 million people and ~2.8 million workers. " +
+          "The rate is a 3-month moving average of the Labour Force Survey, seasonally adjusted. It lags real conditions by ~5-6 weeks (survey conducted, then ~5-week publication delay). " +
+          "Toronto's labour market is Canada's largest and most diverse, dominated by finance, real estate, professional services, and tech. " +
+          "Pre-pandemic baseline (2019): ~5.5-6.0%. COVID peak (April 2020): ~14.5%. Post-pandemic recovery floor (2022-23): ~5.8-6.5%. " +
+          "Tariff-period elevated level (Sep 2025): ~8.9% — reflecting reduced cross-border manufacturing activity and slowing tech hiring."
+  },
+  "trreb": {
+    title: "Toronto Regional Real Estate Board",
+    body: "TRREB covers the Greater Toronto Area including Toronto, Peel, York, Durham, and Halton — roughly 7 million people across ~3,000 sq km. " +
+          "Sales-to-New-Listings Ratio (SNR): below 40% is a buyer's market (supply exceeds demand, prices fall or stagnate); 40-60% is balanced; above 60% is a seller's market (demand exceeds supply, prices rise). " +
+          "The GTA housing market is structurally supply-constrained due to restrictive zoning, long development approval timelines, and geographic limits (greenbelt, lake). " +
+          "Average selling price covers all residential types (detached, semi, townhouse, condo). Detached prices in Toronto proper typically run 40-60% above the board-wide average. " +
+          "Data is published in the first week of each month for the prior month — always a one-month lag."
+  },
+  "insolvency": {
+    title: "Office of the Superintendent of Bankruptcy",
+    body: "The OSB (Office of the Superintendent of Bankruptcy) tracks all consumer and business insolvency filings in Canada. " +
+          "Consumer insolvencies have two forms: bankruptcy (debts discharged, assets liquidated) and consumer proposal (negotiated partial repayment plan, no asset seizure — now ~65% of all filings). " +
+          "Ontario accounts for roughly 37-40% of all Canadian insolvency filings, reflecting its population share and higher household debt levels. " +
+          "Insolvency filings typically lag economic deterioration by 6-18 months — people exhaust credit and savings before filing. " +
+          "A sustained rise above 5,000 Ontario filings/month historically corresponds with recession-level household financial stress."
+  },
+  "bankruptcy": {
+    title: "Office of the Superintendent of Bankruptcy",
+    body: "The OSB tracks all consumer and business insolvency filings in Canada. " +
+          "Consumer insolvencies: bankruptcy (debts discharged, assets liquidated) or consumer proposal (negotiated partial repayment, now ~65% of filings). " +
+          "Ontario accounts for roughly 37-40% of all Canadian filings. " +
+          "Filings typically lag economic deterioration by 6-18 months as people exhaust credit before filing. " +
+          "A sustained rise above 5,000 Ontario filings/month historically corresponds with recession-level household financial stress."
+  },
+  "cpi": {
+    title: "Consumer Price Index — Canada",
+    body: "Statistics Canada's CPI measures the price change of a fixed basket of goods and services purchased by a typical Canadian household. Base year: 2002 = 100. " +
+          "Food purchased from stores (grocery inflation) is a sub-index that typically moves faster than all-items CPI during supply shocks. " +
+          "Toronto households spend roughly 10-13% of their budget on food — making grocery inflation more consequential for lower-income households (who spend a higher proportion on food). " +
+          "CPI is released monthly, typically 4-6 weeks after the reference month. " +
+          "The Bank of Canada targets 2% annual CPI growth; it uses CPI-trim and CPI-median as preferred core inflation measures."
+  },
+  "grocery": {
+    title: "Food CPI — grocery inflation",
+    body: "The food-at-stores sub-index of Canada's CPI tracks grocery prices. It has run above the all-items rate since 2021, reflecting supply chain disruptions, drought in western North America, Ukrainian war impacts on wheat and sunflower oil, and retailer margin expansion. " +
+          "Shrinkflation (smaller package sizes at same price) is not captured in the CPI basket, meaning real food inflation may be understated. " +
+          "Ontario's grocery market is highly concentrated: Loblaw, Empire (Sobeys/FreshCo), and Metro together control roughly 70% of grocery sales."
+  },
+
+  // TRANSPORT
+  "pearson": {
+    title: "Toronto Pearson International Airport (CYYZ)",
+    body: "Pearson is Canada's busiest airport and the second-busiest in North America by passenger volume (~50 million pre-pandemic). " +
+          "Infrastructure: 5 runways (06L/24R, 06R/24L, 05/23, 15L/33R, 15R/33L) and two terminals (Terminal 1 — Star Alliance/Air Canada hub; Terminal 3 — other carriers). " +
+          "Airspace is managed by Nav Canada's Toronto Area Control Centre (ACC) in Trenton, with Pearson Tower handling ground and local traffic. " +
+          "A NOTAM severity of 0 = normal operations; 1 = reduced capacity (e.g. one approach procedure unavailable); 2 = runway closure (capacity reduced 20-50%); 3 = ATC flow control or security restriction (potential ground stops affecting all arrivals). " +
+          "Pearson is also a major air cargo hub — disruptions affect pharmaceutical cold chains, automotive parts, and perishable food imports."
+  },
+  "ttc ridership": {
+    title: "Toronto Transit Commission",
+    body: "The TTC operates subway (4 lines, 75 stations), streetcar (10 routes), and bus networks serving the City of Toronto. " +
+          "Pre-pandemic ridership (2019): ~535 million annual rides, making it Canada's largest and North America's third-busiest transit system. " +
+          "Post-pandemic recovery has been uneven: subway and downtown routes recovered faster; suburban bus routes lagged due to work-from-home patterns. " +
+          "Key capacity constraints: Line 2 Bloor-Danforth runs near capacity during peak hours between Kipling and Kennedy; the Eglinton Crosstown LRT (under construction, opening TBD) is intended to relieve east-west surface transit pressure. " +
+          "Ridership is a proxy for downtown economic activity and commuter confidence in the transit system."
+  },
+
+  // PUBLIC SAFETY
+  "tps sworn": {
+    title: "Toronto Police Service — sworn strength",
+    body: "TPS is organized into three commands: Community Safety Command (neighbourhood policing — 17 divisions), Specialized Operations Command (Emergency Task Force, Intelligence, Guns & Gangs, Major Crime, Traffic), and Corporate Command (administrative). " +
+          "Sworn officer complement has been roughly stable at ~5,100-5,200 since 2016 despite population growth of ~400,000 in the same period. " +
+          "Toronto's sworn officer ratio (~545 officers per 100,000 population) is lower than comparable North American cities — New York ~400, Chicago ~450, but both have much higher violent crime rates. " +
+          "Recruitment and retention are ongoing challenges: the academy produces ~200 graduates per year but attrition (retirement, resignation) runs ~150-200 annually, keeping net complement roughly flat."
+  },
+  "tps civilian": {
+    title: "TPS civilian staff",
+    body: "Civilian staff at TPS include communications operators (911 dispatch), IT professionals, forensic analysts, court officers, administrative support, and legal staff. " +
+          "Civilian roles have expanded as TPS has sought to free sworn officers from administrative duties — a process called 'civilianization' begun in earnest after the 2020 budget debates. " +
+          "Civilian staff are represented by TPSA (Toronto Police Association's civilian division) and CUPE Local 79. " +
+          "The ratio of civilian to sworn staff (~1:3) is broadly comparable to other large Canadian police services."
+  },
+  "fill rate": {
+    title: "TPS uniform fill rate",
+    body: "The fill rate compares actual deployed uniform officers against the Board-approved authorized complement. " +
+          "A rate above 100% means TPS is staffed above its authorized number (can occur during transition periods or when retirements lag projected). " +
+          "A rate below 95% typically indicates recruitment is not keeping pace with attrition and is operationally significant — fewer officers means reduced divisional staffing and overtime reliance. " +
+          "Complement decisions are made by the Toronto Police Services Board annually, balancing budget pressure against service level commitments. " +
+          "Data lag is approximately one year — the most recently available public dataset covers the prior calendar year."
+  },
+  "community safety command": {
+    title: "TPS Community Safety Command",
+    body: "Community Safety Command (CSC) covers the 17 geographic divisions that provide neighbourhood policing across Toronto. " +
+          "CSC officers handle the majority of calls for service — domestic, mental health, traffic, break-and-enter, and community engagement. " +
+          "CSC's share of uniform officers has declined from ~77% in 2016 to ~69% in recent years, as the Specialized Operations Command has grown. " +
+          "This shift reflects the expansion of specialized units (Guns & Gangs, Intelligence) in response to gun violence trends — but is sometimes cited as a factor in slower divisional response times."
+  },
+  "specialized operations": {
+    title: "TPS Specialized Operations Command",
+    body: "Specialized Operations Command (SOC) includes the Emergency Task Force (ETF — Toronto's tactical unit), Intelligence Services, Guns & Gangs Investigations, Major Crime, Homicide, Sexual Assault, Forensic Identification, and the Marine and Traffic units. " +
+          "SOC's share of uniform officers has risen from ~14% in 2016 to ~19% in recent years — driven primarily by the expansion of the Guns & Gangs unit following sustained increases in gun violence in 2018-2021. " +
+          "The ETF responds to barricaded persons, hostage situations, and high-risk warrant service — it is the primary tactical resource for the entire Toronto area."
+  },
+};
+
+// Match an indicator name to a knowledge entry.
+// Returns the knowledge object or null.
+function lookupKnowledge(indicatorName) {
+  const n = (indicatorName || "").toLowerCase();
+  // Check keys from longest to shortest to prefer more specific matches
+  const keys = Object.keys(CARD_KNOWLEDGE).sort((a, b) => b.length - a.length);
+  for(const key of keys) {
+    if(n.includes(key)) return CARD_KNOWLEDGE[key];
+  }
+  return null;
+}
 
 function inferSector(name) {
   const n = (name||"").toLowerCase();
@@ -537,12 +875,24 @@ function render(data) {
       const tierHtml = tier
         ? `<div class="card-tier">${tier}</div>` : "";
 
-      // Info button + tooltip — only when there are notes to show
-      // Strip the tier prefix from display text so it's not double-shown
-      const tooltipText = (r.notes || "").replace(/^Tier\s+\d+\s*[—–-]\s*/i, "").trim();
-      const infoHtml = tooltipText
+      // Info button + tooltip: scraper notes first, then static knowledge below a divider
+      const scraperText = (r.notes || "").replace(/^Tier\s+\d+\s*[—–-]\s*/i, "").trim();
+      const knowledge = lookupKnowledge(r.indicator);
+      const hasTooltip = scraperText || knowledge;
+
+      let tooltipInner = "";
+      if(scraperText) {
+        tooltipInner += `<div class="tooltip-scraper">${scraperText}</div>`;
+      }
+      if(knowledge) {
+        if(scraperText) tooltipInner += `<hr class="tooltip-divider">`;
+        tooltipInner += `<div class="tooltip-knowledge-title">${knowledge.title}</div>`;
+        tooltipInner += `<div class="tooltip-knowledge-body">${knowledge.body}</div>`;
+      }
+
+      const infoHtml = hasTooltip
         ? `<div class="card-info-btn" aria-label="Notes">i</div>
-           <div class="card-tooltip">${tooltipText}</div>` : "";
+           <div class="card-tooltip">${tooltipInner}</div>` : "";
 
       card.innerHTML = `
         <div class="card-dot ${dotClass(s)}"></div>
@@ -562,7 +912,7 @@ function render(data) {
   document.getElementById("footer-sources").textContent =
     "Sources: IESO · Bank of Canada · StatsCan · Toronto Open Data · Environment Canada · data.ontario.ca · open.canada.ca · NAV Canada · Toronto Police ASR · Stooq · Stockr";
   document.getElementById("footer-run").textContent =
-    `TII v3.0 · scraper run ${rd} UTC · auto-refresh every 6 hours`;
+    `TII v3.1 · scraper run ${rd} UTC · auto-refresh every 6 hours`;
 }
 
 function showError(msg) {
