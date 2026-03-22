@@ -1,1 +1,347 @@
 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TII Archive — Toronto Infrastructure Intelligence</title>
+<style>
+  :root {
+    --bg:       #f8f8f6;
+    --surface:  #ffffff;
+    --surface2: #f1efea;
+    --border:   rgba(0,0,0,0.10);
+    --border2:  rgba(0,0,0,0.18);
+    --text1:    #1a1a18;
+    --text2:    #5a5a56;
+    --text3:    #9a9a94;
+    --ok:       #3b6d11;
+    --ok-bg:    #eaf3de;
+    --warn:     #854f0b;
+    --warn-bg:  #faeeda;
+    --alert:    #a32d2d;
+    --alert-bg: #fcebeb;
+    --manual:   #888780;
+    --blue:     #185fa5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:       #1a1a18;
+      --surface:  #242422;
+      --surface2: #2e2e2c;
+      --border:   rgba(255,255,255,0.10);
+      --border2:  rgba(255,255,255,0.18);
+      --text1:    #f0efe8;
+      --text2:    #a8a8a0;
+      --text3:    #686860;
+      --ok:       #97c459;
+      --ok-bg:    #1e2e10;
+      --warn:     #ef9f27;
+      --warn-bg:  #2a1e08;
+      --alert:    #f09595;
+      --alert-bg: #2e1010;
+      --blue:     #85b7eb;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text1);
+    font-size: 15px; line-height: 1.5;
+  }
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* ── Topbar ── */
+  .topbar {
+    background: var(--surface);
+    border-bottom: 0.5px solid var(--border2);
+    padding: 0 1.5rem;
+    display: flex; align-items: center;
+    justify-content: space-between;
+    gap: 1rem; height: 52px;
+    position: sticky; top: 0; z-index: 10;
+  }
+  .topbar-left { display: flex; align-items: baseline; gap: 10px; }
+  .topbar-title { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+  .topbar-sub   { font-size: 12px; color: var(--text3); }
+  .topbar-link  { font-size: 12px; color: var(--blue); }
+
+  /* ── Main layout ── */
+  .main { max-width: 960px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+
+  .page-title {
+    font-size: 22px; font-weight: 700; letter-spacing: -.02em;
+    margin-bottom: .3rem;
+  }
+  .page-sub {
+    font-size: 13px; color: var(--text3); margin-bottom: 2rem;
+  }
+
+  /* ── Stats bar ── */
+  .stats-bar {
+    display: flex; gap: 2rem; flex-wrap: wrap;
+    background: var(--surface); border: 0.5px solid var(--border);
+    border-radius: 10px; padding: 1rem 1.25rem;
+    margin-bottom: 2rem;
+  }
+  .stat { display: flex; flex-direction: column; gap: 2px; }
+  .stat-value { font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
+  .stat-label { font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: .05em; }
+
+  /* ── Year divider ── */
+  .year-heading {
+    font-size: 11px; font-weight: 700; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--text3);
+    margin: 2rem 0 .75rem;
+    padding-bottom: 6px;
+    border-bottom: 0.5px solid var(--border);
+  }
+
+  /* ── Week row ── */
+  .week-row {
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 8px;
+    display: grid;
+    grid-template-columns: 90px 1fr auto;
+    gap: 0 16px;
+    align-items: start;
+    transition: border-color .15s;
+  }
+  .week-row:hover { border-color: var(--border2); }
+  .week-row.has-alert { border-left: 3px solid var(--alert); }
+  .week-row.has-warn  { border-left: 3px solid var(--warn);  }
+
+  .week-label {
+    font-size: 13px; font-weight: 600;
+    color: var(--text2); padding-top: 1px;
+  }
+  .week-date {
+    font-size: 11px; color: var(--text3); margin-top: 2px;
+  }
+
+  .week-body { min-width: 0; }
+  .week-intro {
+    font-size: 13px; color: var(--text2);
+    line-height: 1.5; margin-bottom: 6px;
+  }
+  .week-intro em { color: var(--text3); font-style: italic; }
+  .week-alerts {
+    display: flex; flex-wrap: wrap; gap: 5px;
+    margin-bottom: 6px;
+  }
+  .alert-tag {
+    font-size: 11px; padding: 2px 8px; border-radius: 99px;
+    background: var(--alert-bg); color: var(--alert); font-weight: 500;
+  }
+  .warn-tag {
+    font-size: 11px; padding: 2px 8px; border-radius: 99px;
+    background: var(--warn-bg); color: var(--warn); font-weight: 500;
+  }
+  .week-pills {
+    display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
+  }
+  .pill {
+    font-size: 11px; padding: 2px 8px; border-radius: 99px; font-weight: 500;
+  }
+  .pill-ok     { background: var(--ok-bg);     color: var(--ok); }
+  .pill-warn   { background: var(--warn-bg);   color: var(--warn); }
+  .pill-alert  { background: var(--alert-bg);  color: var(--alert); }
+  .pill-manual { background: var(--surface2);  color: var(--manual); }
+  .pill-error  { background: var(--alert-bg);  color: var(--alert); opacity: .6; }
+
+  .week-links {
+    display: flex; flex-direction: column;
+    gap: 6px; align-items: flex-end;
+    white-space: nowrap; padding-top: 1px;
+  }
+  .link-btn {
+    font-size: 11px; padding: 4px 10px;
+    border: 0.5px solid var(--border2);
+    border-radius: 6px; color: var(--text2);
+    background: transparent;
+    transition: background .1s, color .1s;
+  }
+  .link-btn:hover { background: var(--surface2); color: var(--text1); text-decoration: none; }
+  .link-btn.primary {
+    background: var(--blue); color: #fff; border-color: transparent;
+  }
+  .link-btn.primary:hover { opacity: .88; }
+
+  /* ── Empty / loading ── */
+  #loading { text-align: center; padding: 4rem; color: var(--text3); font-size: 14px; }
+  #error   { color: var(--alert); font-size: 13px; padding: 2rem; display: none; }
+
+  .footer {
+    font-size: 11px; color: var(--text3);
+    border-top: 0.5px solid var(--border);
+    padding: 1rem 0; margin-top: 2rem;
+    display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-left">
+    <span class="topbar-title">Toronto Infrastructure Intelligence</span>
+    <span class="topbar-sub">Weekly Archive</span>
+  </div>
+  <div>
+    <a class="topbar-link" href="index.html">Live dashboard &rarr;</a>
+  </div>
+</div>
+
+<div class="main">
+  <div class="page-title">Weekly archive</div>
+  <div class="page-sub">Frozen weekly snapshots of Toronto infrastructure indicators, with intelligence briefs.</div>
+
+  <div id="loading">Loading archive index&hellip;</div>
+  <div id="error"></div>
+  <div id="content" style="display:none">
+    <div class="stats-bar" id="stats-bar"></div>
+    <div id="weeks-list"></div>
+  </div>
+
+  <div class="footer">
+    <span>Toronto Infrastructure Intelligence &mdash; criticalto.ca</span>
+    <span id="footer-gen"></span>
+  </div>
+</div>
+
+<script>
+const INDEX_URL = "archive/index.json";
+
+function fmtDate(s) {
+  if(!s) return "";
+  return String(s).slice(0, 10);
+}
+
+function pillHtml(n, cls, label) {
+  if(!n) return "";
+  return `<span class="pill pill-${cls}">${n} ${label}</span>`;
+}
+
+function render(index) {
+  document.getElementById("loading").style.display = "none";
+  document.getElementById("content").style.display = "block";
+
+  const weeks = index.weeks || [];
+  const genAt = index.generated_at || "";
+
+  document.getElementById("footer-gen").textContent =
+    `Index generated ${fmtDate(genAt)} UTC · ${weeks.length} weeks archived`;
+
+  // Stats bar
+  const totalAlertWeeks = weeks.filter(w => (w.alerts||[]).length > 0).length;
+  const totalWarnWeeks  = weeks.filter(w => (w.totals||{}).warn > 0).length;
+  const hasBriefs       = weeks.filter(w => w.brief_file).length;
+  const bar = document.getElementById("stats-bar");
+  bar.innerHTML = `
+    <div class="stat">
+      <span class="stat-value">${weeks.length}</span>
+      <span class="stat-label">Weeks archived</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value" style="color:var(--alert)">${totalAlertWeeks}</span>
+      <span class="stat-label">Weeks with alerts</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value" style="color:var(--warn)">${totalWarnWeeks}</span>
+      <span class="stat-label">Weeks with warnings</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">${hasBriefs}</span>
+      <span class="stat-label">Briefs available</span>
+    </div>`;
+
+  // Group by year
+  const byYear = {};
+  for(const w of weeks) {
+    const yr = (w.week || "").slice(0, 4) || "Unknown";
+    if(!byYear[yr]) byYear[yr] = [];
+    byYear[yr].push(w);
+  }
+
+  const list = document.getElementById("weeks-list");
+  list.innerHTML = "";
+
+  for(const yr of Object.keys(byYear).sort().reverse()) {
+    const yDiv = document.createElement("div");
+    yDiv.className = "year-heading";
+    yDiv.textContent = yr;
+    list.appendChild(yDiv);
+
+    for(const w of byYear[yr]) {
+      const t = w.totals || {};
+      const alerts = w.alerts || [];
+      const hasAlert = alerts.length > 0;
+      const hasWarn  = !hasAlert && (t.warn || 0) > 0;
+
+      // Alert / warn tags
+      let alertTagsHtml = "";
+      if(hasAlert) {
+        alertTagsHtml = `<div class="week-alerts">` +
+          alerts.slice(0,3).map(a => `<span class="alert-tag">&#9888; ${a}</span>`).join("") +
+          (alerts.length > 3 ? `<span class="alert-tag">+${alerts.length-3} more</span>` : "") +
+          `</div>`;
+      }
+
+      // Intro text
+      const intro = w.brief_intro
+        ? `<div class="week-intro">${w.brief_intro}</div>`
+        : `<div class="week-intro"><em>No brief available for this week.</em></div>`;
+
+      // Pills
+      const pills = [
+        pillHtml(t.ok,     "ok",     "ok"),
+        pillHtml(t.warn,   "warn",   "warn"),
+        pillHtml(t.alert,  "alert",  "alert"),
+        pillHtml(t.error,  "error",  "errors"),
+        pillHtml(t.manual, "manual", "manual"),
+      ].filter(Boolean).join("");
+
+      // Links
+      const dataLink = `<a class="link-btn" href="${w.data_file}" download>JSON snapshot</a>`;
+      const briefLink = w.brief_file
+        ? `<a class="link-btn primary" href="${w.brief_file}">Read brief</a>`
+        : `<span class="link-btn" style="opacity:.4;cursor:default">No brief</span>`;
+
+      const row = document.createElement("div");
+      row.className = "week-row" + (hasAlert ? " has-alert" : hasWarn ? " has-warn" : "");
+      row.innerHTML = `
+        <div>
+          <div class="week-label">${w.week || "—"}</div>
+          <div class="week-date">${fmtDate(w.data_date)}</div>
+        </div>
+        <div class="week-body">
+          ${alertTagsHtml}
+          ${intro}
+          <div class="week-pills">${pills}</div>
+        </div>
+        <div class="week-links">
+          ${briefLink}
+          ${dataLink}
+        </div>`;
+      list.appendChild(row);
+    }
+  }
+}
+
+function showError(msg) {
+  document.getElementById("loading").style.display = "none";
+  const e = document.getElementById("error");
+  e.style.display = "block";
+  e.textContent = "Could not load archive index: " + msg;
+}
+
+fetch(INDEX_URL + "?t=" + Date.now(), { cache: "no-store" })
+  .then(r => { if(!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+  .then(render)
+  .catch(e => showError(e.message));
+</script>
+</body>
+</html>
