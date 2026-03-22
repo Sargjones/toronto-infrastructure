@@ -73,13 +73,6 @@
   .topbar-title { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
   .topbar-sub { font-size: 12px; color: var(--text3); }
   .topbar-right { display: flex; align-items: center; gap: 12px; }
-  .refresh-btn {
-    font-size: 12px; padding: 5px 12px;
-    border: 0.5px solid var(--border2);
-    border-radius: 6px; background: transparent;
-    color: var(--text2); cursor: pointer;
-  }
-  .refresh-btn:hover { background: var(--surface2); }
   .pulse { display: inline-block; width: 7px; height: 7px;
     border-radius: 50%; background: var(--ok); margin-right: 5px;
     animation: pulse 2.5s ease-in-out infinite; }
@@ -212,14 +205,17 @@
     display: none;
     position: absolute;
     bottom: calc(100% + 6px);
-    right: -6px;
-    width: 260px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 340px;
+    max-height: 340px;
+    overflow-y: auto;
     background: var(--surface);
     border: 0.5px solid var(--border2);
     border-radius: 8px;
-    padding: 9px 11px;
-    font-size: 11px; line-height: 1.5; color: var(--text2);
-    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    padding: 10px 13px;
+    font-size: 11px; line-height: 1.55; color: var(--text2);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.15);
     z-index: 100;
     pointer-events: none;
     white-space: normal;
@@ -239,11 +235,14 @@
   .tooltip-knowledge-body {
     color: var(--text2);
   }
-  /* Flip to below the card if it's in the top half of the viewport */
+  /* Flip to below the card when near the top of the viewport */
   .card-tooltip.flip-down {
     bottom: auto;
     top: calc(100% + 6px);
   }
+  /* Nudge left/right when centered tooltip would overflow viewport edges */
+  .card-tooltip.nudge-left  { left: auto; right: -6px;  transform: none; }
+  .card-tooltip.nudge-right { left: -6px; transform: none; }
   .card:hover .card-tooltip { display: block; }
 
   /* Ensure cards in the last grid row don't clip their tooltip */
@@ -325,7 +324,6 @@
   </div>
   <div class="topbar-right">
     <span id="status-dot" class="pulse"></span>
-    <button class="refresh-btn" id="refresh-btn" onclick="handleRefresh()">Refresh</button>
   </div>
 </div>
 
@@ -353,7 +351,6 @@
 <script>
 const DATA_URL = "https://data.criticalto.ca/tii_data_latest.json";
 const BRIEF_URL = "https://data.criticalto.ca/tii_brief_latest.md";
-const REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 const SECTOR_ORDER = ["energy","water","health","food","transport","environment","financial","public_safety"];
 const SECTOR_LABELS = {
@@ -780,11 +777,22 @@ async function loadBrief(isAlert) {
 function render(data) {
   const results = data.results || [];
   const t = data.totals || {};
-  const rd = (data.run_date || (data.run_timestamp||"").slice(0,10));
+  const ts = data.run_timestamp || "";
+  const rd = data.run_date || ts.slice(0,10);
+
+  // Build a human-readable datetime string from the ISO timestamp
+  // run_timestamp is UTC ISO: "2026-03-22T14:30:00Z"
+  let rdDisp = rd || "unknown";
+  let rdFull = rd || "unknown";
+  if(ts && ts.length >= 16) {
+    const dateStr = ts.slice(0,10);
+    const timeStr = ts.slice(11,16);   // HH:MM
+    rdFull  = `${dateStr} ${timeStr} UTC`;
+    rdDisp  = rdFull;
+  }
 
   document.getElementById("loading").style.display = "none";
   document.getElementById("dashboard").style.display = "block";
-  const rdDisp = rd ? rd + " UTC" : "unknown";
   document.getElementById("topbar-sub").textContent = rdDisp;
 
   const dot = document.getElementById("status-dot");
@@ -810,7 +818,7 @@ function render(data) {
   }
   const dateSpan = document.createElement("span");
   dateSpan.className = "summary-date";
-  dateSpan.textContent = `updated ${rd}`;
+  dateSpan.textContent = `updated ${rdFull}`;
   bar.appendChild(dateSpan);
 
   const banners = document.getElementById("alert-banners");
@@ -838,11 +846,20 @@ function render(data) {
 
   loadBrief((t.alert||0) > 0);
 
-  // After render: flip tooltips that would overflow below the viewport
+  // After render: correct tooltips that would overflow the viewport
   requestAnimationFrame(() => {
     document.querySelectorAll(".card-tooltip").forEach(tip => {
-      const rect = tip.getBoundingClientRect();
-      if(rect.top < 0) tip.classList.add("flip-down");
+      // Make briefly visible at display:block to measure, then hide again
+      tip.style.display = "block";
+      const r = tip.getBoundingClientRect();
+      tip.style.display = "";
+
+      // Vertical: flip below card if tooltip goes above viewport top
+      if(r.top < 4) tip.classList.add("flip-down");
+
+      // Horizontal: nudge if centered tooltip overflows left or right edge
+      if(r.right > window.innerWidth - 4) tip.classList.add("nudge-left");
+      else if(r.left < 4)                 tip.classList.add("nudge-right");
     });
   });
   const sectorsEl = document.getElementById("sectors");
@@ -912,7 +929,7 @@ function render(data) {
   document.getElementById("footer-sources").textContent =
     "Sources: IESO · Bank of Canada · StatsCan · Toronto Open Data · Environment Canada · data.ontario.ca · open.canada.ca · NAV Canada · Toronto Police ASR · Stooq · Stockr";
   document.getElementById("footer-run").textContent =
-    `TII v3.1 · scraper run ${rd} UTC · auto-refresh every 6 hours`;
+    `TII v3.1 · scraper run ${rdFull} · auto-refresh every 6 hours`;
 }
 
 function showError(msg) {
@@ -920,16 +937,6 @@ function showError(msg) {
   const e = document.getElementById("error-msg");
   e.style.display = "block";
   e.textContent = msg;
-}
-
-function handleRefresh() {
-  const btn = document.getElementById("refresh-btn");
-  btn.textContent = "Refreshing…";
-  btn.disabled = true;
-  loadData().finally(() => {
-    btn.textContent = "Refresh";
-    btn.disabled = false;
-  });
 }
 
 async function loadData() {
@@ -953,7 +960,6 @@ async function loadData() {
 }
 
 loadData();
-setInterval(loadData, REFRESH_INTERVAL_MS);
 </script>
 </body>
 </html>
