@@ -29,6 +29,16 @@ jobs:
       - name: Run scraper
         run: python tii_scraper.py --no-connectivity-check
 
+- name: Archive weekly snapshot
+  if: github.event_name == 'schedule' && contains(github.event.schedule, '0 6 * * 0')
+  run: |
+    WEEK=$(date +"%Y-W%V")
+    cp tii_data_latest.json tii_data_weekly_${WEEK}.json
+    cp tii_brief_latest.md archive/tii_brief_${WEEK}.md 2>/dev/null || true
+    git add tii_data_weekly_${WEEK}.json archive/ || true
+    git commit -m "Weekly archive: ${WEEK}" || echo "Nothing to archive"
+    git push
+
       - name: Commit updated JSON
         run: |
           git config user.name  "TII Scraper"
