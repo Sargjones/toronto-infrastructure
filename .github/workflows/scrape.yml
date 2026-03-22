@@ -40,11 +40,20 @@ jobs:
         run: |
           WEEK=$(date -u +"%Y-W%V")
           echo "Archiving week: ${WEEK}"
-          cp tii_data_latest.json tii_data_weekly_${WEEK}.json
+
           mkdir -p archive
+
+          cp tii_data_latest.json tii_data_weekly_${WEEK}.json
+
           if [ -f tii_brief_latest.md ]; then
             cp tii_brief_latest.md archive/tii_brief_${WEEK}.md
+            echo "Brief archived."
+          else
+            echo "No tii_brief_latest.md found -- snapshot will have no brief."
           fi
+
+          python3 build_archive_index.py
+
           git add tii_data_weekly_${WEEK}.json archive/ || true
           git diff --cached --quiet || git commit -m "archive: weekly snapshot ${WEEK}"
 
