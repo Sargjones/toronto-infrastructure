@@ -112,6 +112,97 @@
   .alert-banner strong { font-weight: 600; }
 
   .sector { margin-bottom: 1.75rem; }
+
+  /* ── Freight profile panel ─────────────────────────────────────────────── */
+  .freight-panel {
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin: 16px 0 4px;
+  }
+  .freight-panel-title {
+    font-size: 11px; font-weight: 700; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--text3);
+    margin-bottom: 12px; padding-bottom: 8px;
+    border-bottom: 0.5px solid var(--border);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .freight-panel-title span.freight-scale {
+    font-size: 11px; font-weight: 400; letter-spacing: 0;
+    text-transform: none; color: var(--text2);
+  }
+  .freight-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  @media (max-width: 640px) {
+    .freight-grid { grid-template-columns: 1fr; }
+  }
+  .freight-col-title {
+    font-size: 11px; font-weight: 600; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--text2);
+    margin-bottom: 8px;
+  }
+  /* Commodity bars */
+  .commodity-row {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 7px;
+  }
+  .commodity-label {
+    font-size: 12px; color: var(--text1);
+    width: 130px; flex-shrink: 0;
+  }
+  .commodity-bar-wrap {
+    flex: 1; height: 8px; background: var(--surface2);
+    border-radius: 99px; overflow: hidden;
+  }
+  .commodity-bar {
+    height: 100%; border-radius: 99px;
+    background: var(--blue); opacity: .65;
+    transition: width .4s ease;
+  }
+  .commodity-meta {
+    font-size: 11px; color: var(--text3);
+    width: 80px; text-align: right; flex-shrink: 0;
+  }
+  /* Cascade risk table */
+  .cascade-table {
+    width: 100%; border-collapse: collapse;
+    font-size: 12px;
+  }
+  .cascade-table th {
+    text-align: left; font-size: 10px; font-weight: 600;
+    letter-spacing: .05em; text-transform: uppercase;
+    color: var(--text3); padding: 0 6px 6px 0;
+    border-bottom: 0.5px solid var(--border);
+  }
+  .cascade-table td {
+    padding: 5px 6px 5px 0;
+    border-bottom: 0.5px solid var(--border);
+    color: var(--text2); vertical-align: top;
+  }
+  .cascade-table tr:last-child td { border-bottom: none; }
+  .cascade-table td.cascade-commodity { color: var(--text1); font-weight: 500; }
+  .cascade-table td.cascade-days { white-space: nowrap; }
+  .cascade-days-pip {
+    display: inline-block; width: 8px; height: 8px;
+    border-radius: 50%; margin-right: 4px; vertical-align: middle;
+  }
+  .pip-critical { background: var(--alert); }
+  .pip-warn     { background: var(--warn); }
+  .pip-ok       { background: var(--ok); }
+  /* Jet fuel callout */
+  .jet-callout {
+    background: var(--warn-bg);
+    border: 0.5px solid var(--warn);
+    border-radius: 8px;
+    padding: 9px 12px;
+    margin-top: 12px;
+    font-size: 12px; line-height: 1.5; color: var(--text1);
+  }
+  .jet-callout strong { color: var(--warn); }
   .sector-header {
     font-size: 11px; font-weight: 600; letter-spacing: .07em;
     text-transform: uppercase; color: var(--text3);
@@ -379,10 +470,10 @@
 const DATA_URL = "https://data.criticalto.ca/tii_data_latest.json";
 const BRIEF_URL = "https://data.criticalto.ca/tii_brief_latest.md";
 
-const SECTOR_ORDER = ["energy","water","health","food","transport","environment","financial","public_safety"];
+const SECTOR_ORDER = ["energy","water","health","food","transport_logistics","environment","financial","public_safety"];
 const SECTOR_LABELS = {
   energy:"Energy", water:"Water", health:"Health",
-  food:"Food & prices", transport:"Transport",
+  food:"Food & prices", transport_logistics:"Transport & Logistics",
   environment:"Environment", financial:"Financial",
   public_safety:"Public Safety & Cost"
 };
@@ -660,6 +751,56 @@ const CARD_KNOWLEDGE = {
           "Ridership is a proxy for downtown economic activity and commuter confidence in the transit system."
   },
 
+  // TRANSPORT & LOGISTICS — RAIL
+  "go transit service": {
+    title: "GO Transit regional rail",
+    body: "GO Transit operates 7 commuter rail lines radiating from Union Station, plus UP Express to Pearson Airport. " +
+          "Lines: Lakeshore East (Oshawa), Lakeshore West (Niagara Falls/Hamilton), Kitchener, Barrie, Stouffville, " +
+          "Milton, and Richmond Hill. " +
+          "Approximately 70,000 weekday riders pre-pandemic, recovering toward that level post-COVID. " +
+          "Trains run on CN-owned track for most lines, meaning freight congestion and CN maintenance windows directly affect GO schedules. " +
+          "A major GO disruption cascades immediately into Highway 401/QEW congestion and TTC overcrowding at Union Station. " +
+          "Metrolinx (the operator) is also building Ontario Line, Eglinton Crosstown LRT, and the Bowmanville Extension. " +
+          "Severity: 0=Normal, 1=Minor alerts on individual lines, 2=Major disruption affecting multiple lines or Union Station."
+  },
+  "go transit active": {
+    title: "GO Transit regional rail",
+    body: "Active service alert count across all GO lines and UP Express. " +
+          "Individual line delays are common during winter weather, infrastructure work, and freight conflicts. " +
+          "GO Transit runs on CN track for most of the network — CN freight priority means GO trains can be held for freight passage. " +
+          "The Lakeshore West corridor recently had a 2-day planned service suspension for track work between Union and Aldershot."
+  },
+  "via rail": {
+    title: "VIA Rail — Quebec City-Windsor Corridor",
+    body: "VIA Rail's Corridor is Canada's busiest intercity passenger rail route, connecting Windsor-Toronto-Ottawa-Montreal-Quebec City. " +
+          "Key Toronto trains: 50/51 (Toronto-Montreal, ~5hrs), 60/61 (Toronto-Ottawa, ~4.5hrs). " +
+          "VIA operates on CN-owned track for 97% of its network — it has no priority over freight, leading to chronic on-time performance issues. " +
+          "In February 2025 the federal government rebranded the VIA High Frequency Rail project as Alto, a proposed high-speed corridor. " +
+          "Corridor disruptions affect business travel, government connectivity, and tourist flows into Toronto. " +
+          "Severity: 0=On time/minor, 1=Delays, 2=Cancellations or suspended service."
+  },
+  "cn freight labour": {
+    title: "CN Rail — freight labour risk",
+    body: "CN Rail (Canadian National) operates the Oakville Subdivision (lakeshore) and Kingston Subdivision through Toronto — " +
+          "the primary corridors for fuel, auto parts, chemicals, and grain moving through the GTHA. " +
+          "CN's Brampton Intermodal Terminal (Malport) is one of the largest container facilities in eastern Canada. " +
+          "GO Transit trains share CN track on most lines; a CN labour stoppage directly affects GO schedules. " +
+          "In August 2024, CN locked out 6,000 Teamsters workers — the federal government intervened with binding arbitration within 17 hours. " +
+          "Under the Canada Labour Code, rail is not classified as an essential service, meaning a full stoppage is legally permitted. " +
+          "A simultaneous CN/CPKC stoppage has been estimated to cost ~$1 billion per day in Canadian trade disruption. " +
+          "Risk: 0=No dispute, 1=Active negotiations, 2=Strike notice or lockout active."
+  },
+  "cpkc freight labour": {
+    title: "CPKC — freight labour risk",
+    body: "CPKC (Canadian Pacific Kansas City) operates through Toronto's north end, including Agincourt Yard — " +
+          "one of the largest classification yards in eastern Canada. " +
+          "CPKC's network extends from Vancouver to the Gulf of Mexico and into Mexico, making it a key North American trade spine. " +
+          "30,000 GO Transit commuters were directly affected when CPKC trains stopped running during the August 2024 dispute " +
+          "because GO Transit's Milton line shares CPKC track. " +
+          "CPKC locked out 3,300 Teamsters workers simultaneously with CN in August 2024 — the first dual stoppage in Canadian history. " +
+          "Risk: 0=No dispute, 1=Active negotiations, 2=Strike notice or lockout active."
+  },
+
   // PUBLIC SAFETY
   "tps sworn": {
     title: "Toronto Police Service — sworn strength",
@@ -759,10 +900,64 @@ const TIER_MAP = {
   "air quality":                    { tier: 3, sector: "health" },
   "aqhi":                           { tier: 3, sector: "health" },
   "wwtp eca":                       { tier: 3, sector: "health" },
-  // TRANSPORT
-  "pearson airport":                { tier: 1, sector: "transport" },
-  "port of montreal":               { tier: 2, sector: "transport" },
-  "ttc ridership":                  { tier: 3, sector: "transport" },
+  // TRANSPORT & LOGISTICS
+  "pearson airport":                { tier: 1, sector: "transport_logistics" },
+  "via rail":                       { tier: 1, sector: "transport_logistics" },
+  "cn freight":                     { tier: 2, sector: "transport_logistics" },
+  "cpkc freight":                   { tier: 2, sector: "transport_logistics" },
+  "go transit":                     { tier: 2, sector: "transport_logistics" },
+  "port of montreal":               { tier: 2, sector: "transport_logistics" },
+  "ttc ridership":                  { tier: 3, sector: "transport_logistics" },
+  // TRANSPORT & LOGISTICS — RAIL
+  "go transit service": {
+    title: "GO Transit regional rail",
+    body: "GO Transit operates 7 commuter rail lines radiating from Union Station, plus UP Express to Pearson Airport. " +
+          "Lines: Lakeshore East (Oshawa), Lakeshore West (Niagara Falls/Hamilton), Kitchener, Barrie, Stouffville, " +
+          "Milton, and Richmond Hill. " +
+          "Approximately 70,000 weekday riders pre-pandemic, recovering toward that level post-COVID. " +
+          "Trains run on CN-owned track for most lines, meaning freight congestion and CN maintenance windows directly affect GO schedules. " +
+          "A major GO disruption cascades immediately into Highway 401/QEW congestion and TTC overcrowding at Union Station. " +
+          "Metrolinx (the operator) is also building Ontario Line, Eglinton Crosstown LRT, and the Bowmanville Extension. " +
+          "Severity: 0=Normal, 1=Minor alerts on individual lines, 2=Major disruption affecting multiple lines or Union Station."
+  },
+  "go transit active": {
+    title: "GO Transit regional rail",
+    body: "Active service alert count across all GO lines and UP Express. " +
+          "Individual line delays are common during winter weather, infrastructure work, and freight conflicts. " +
+          "GO Transit runs on CN track for most of the network — CN freight priority means GO trains can be held for freight passage. " +
+          "The Lakeshore West corridor recently had a 2-day planned service suspension for track work between Union and Aldershot."
+  },
+  "via rail": {
+    title: "VIA Rail — Quebec City-Windsor Corridor",
+    body: "VIA Rail's Corridor is Canada's busiest intercity passenger rail route, connecting Windsor-Toronto-Ottawa-Montreal-Quebec City. " +
+          "Key Toronto trains: 50/51 (Toronto-Montreal, ~5hrs), 60/61 (Toronto-Ottawa, ~4.5hrs). " +
+          "VIA operates on CN-owned track for 97% of its network — it has no priority over freight, leading to chronic on-time performance issues. " +
+          "In February 2025 the federal government rebranded the VIA High Frequency Rail project as Alto, a proposed high-speed corridor. " +
+          "Corridor disruptions affect business travel, government connectivity, and tourist flows into Toronto. " +
+          "Severity: 0=On time/minor, 1=Delays, 2=Cancellations or suspended service."
+  },
+  "cn freight labour": {
+    title: "CN Rail — freight labour risk",
+    body: "CN Rail (Canadian National) operates the Oakville Subdivision (lakeshore) and Kingston Subdivision through Toronto — " +
+          "the primary corridors for fuel, auto parts, chemicals, and grain moving through the GTHA. " +
+          "CN's Brampton Intermodal Terminal (Malport) is one of the largest container facilities in eastern Canada. " +
+          "GO Transit trains share CN track on most lines; a CN labour stoppage directly affects GO schedules. " +
+          "In August 2024, CN locked out 6,000 Teamsters workers — the federal government intervened with binding arbitration within 17 hours. " +
+          "Under the Canada Labour Code, rail is not classified as an essential service, meaning a full stoppage is legally permitted. " +
+          "A simultaneous CN/CPKC stoppage has been estimated to cost ~$1 billion per day in Canadian trade disruption. " +
+          "Risk: 0=No dispute, 1=Active negotiations, 2=Strike notice or lockout active."
+  },
+  "cpkc freight labour": {
+    title: "CPKC — freight labour risk",
+    body: "CPKC (Canadian Pacific Kansas City) operates through Toronto's north end, including Agincourt Yard — " +
+          "one of the largest classification yards in eastern Canada. " +
+          "CPKC's network extends from Vancouver to the Gulf of Mexico and into Mexico, making it a key North American trade spine. " +
+          "30,000 GO Transit commuters were directly affected when CPKC trains stopped running during the August 2024 dispute " +
+          "because GO Transit's Milton line shares CPKC track. " +
+          "CPKC locked out 3,300 Teamsters workers simultaneously with CN in August 2024 — the first dual stoppage in Canadian history. " +
+          "Risk: 0=No dispute, 1=Active negotiations, 2=Strike notice or lockout active."
+  },
+
   // PUBLIC SAFETY
   "tps sworn":                      { tier: 1, sector: "public_safety" },
   "tps civilian":                   { tier: 1, sector: "public_safety" },
@@ -798,9 +993,9 @@ const TIER_META = {
     2: "System capacity",
     3: "Community & social determinants",
   },
-  transport: {
-    1: "External gateway",
-    2: "Regional network",
+  transport_logistics: {
+    1: "External & intercity gateways",
+    2: "Regional freight & commuter rail",
     3: "Local mobility",
   },
   public_safety: {
@@ -835,7 +1030,7 @@ function inferSector(name) {
   if(/water|watermain|wwtp/.test(n)) return "water";
   if(/icu|er capacity|wastewater|blood|shelter/.test(n)) return "health";
   if(/cpi|grocery|food bank|inflation/.test(n)) return "food";
-  if(/ttc|ridership|port|dwell|pearson|notam|airport|cyyz/.test(n)) return "transport";
+  if(/ttc|ridership|port|dwell|pearson|notam|airport|cyyz|go transit|via rail|freight|labour risk|cn rail|cpkc|rail corridor/.test(n)) return "transport_logistics";
   if(/aqhi|air quality|smog/.test(n)) return "environment";
   if(/bank|rate|cad|usd|fuel|price|bankruptcy|insolvency|eviction|unemployment|trreb|sales.to.new|selling price/.test(n)) return "financial";
   if(/tps|sworn|fill rate|community safety|specialized operations|police staffing/.test(n)) return "public_safety";
@@ -938,6 +1133,106 @@ async function loadBrief(isAlert) {
   } catch(e) {
     panel.style.display = "none";
   }
+}
+
+// ── Freight profile panel ─────────────────────────────────────────────────────
+function buildFreightPanel() {
+  const COMMODITIES = [
+    { label: "Intermodal containers", pct: 100, meta: "22% of CN revenue",
+      note: "Consumer goods, Asian imports via Vancouver/Prince Rupert, retail merchandise" },
+    { label: "Petroleum & chemicals", pct: 90,  meta: "~20% of revenue",
+      note: "Jet fuel to Pearson via CN Malport, chlorine for water treatment, LPG, industrial chemicals" },
+    { label: "Automotive parts",      pct: 75,  meta: "just-in-time",
+      note: "Parts for Windsor-Oshawa auto corridor. Plants carry 4-8 hrs inventory — stoppage shuts lines within a day" },
+    { label: "Food & perishables",    pct: 60,  meta: "daily volumes",
+      note: "California produce, frozen goods, dairy distribution for ~6M GTA residents" },
+    { label: "Metals & minerals",     pct: 40,  meta: "industrial",
+      note: "Steel coil, aluminum, construction aggregates for GTA building sector" },
+    { label: "Dangerous goods",       pct: 30,  meta: "527K carloads/yr (CA)",
+      note: "Chlorine, propane, industrial acids. Regulated under Transport Canada TDGA" },
+  ];
+
+  const CASCADE = [
+    { commodity: "Jet fuel (Pearson)",    days: "3-5 days",  sev: "critical",
+      impact: "Pearson flight cancellations begin as tank farm reserves deplete" },
+    { commodity: "Automotive parts",      days: "4-8 hours", sev: "critical",
+      impact: "Assembly line shutdowns: Ford Oakville, Stellantis Windsor, GM Oshawa" },
+    { commodity: "Water treatment chem.", days: "7-14 days", sev: "critical",
+      impact: "Toronto Water chlorine reserves; alternate supply by truck is limited" },
+    { commodity: "Consumer goods",        days: "2-3 weeks", sev: "warn",
+      impact: "Retail stockouts begin; grocery shelf gaps for non-perishables" },
+    { commodity: "Food & perishables",    days: "3-5 days",  sev: "warn",
+      impact: "Fresh produce gaps in GTA distribution; price spikes for imported items" },
+    { commodity: "Propane & LPG",         days: "1-2 weeks", sev: "warn",
+      impact: "Residential heating shortfalls in areas without natural gas service" },
+    { commodity: "Steel & construction",  days: "2-4 weeks", sev: "ok",
+      impact: "Construction project delays; longer-term supply chain disruption" },
+  ];
+
+  const panel = document.createElement("div");
+  panel.className = "freight-panel";
+
+  panel.innerHTML = `
+    <div class="freight-panel-title">
+      GTA Rail Freight Profile
+      <span class="freight-scale">
+        &nbsp;&mdash;&nbsp;
+        1.2M TEUs/yr &nbsp;&middot;&nbsp;
+        $8B economic activity &nbsp;&middot;&nbsp;
+        20,000 jobs &nbsp;&middot;&nbsp;
+        CN Brampton &amp; CPKC Vaughan terminals
+      </span>
+    </div>
+    <div class="freight-grid">
+      <div>
+        <div class="freight-col-title">Commodity mix</div>
+        ${COMMODITIES.map(c => `
+          <div class="commodity-row" title="${c.note}">
+            <div class="commodity-label">${c.label}</div>
+            <div class="commodity-bar-wrap">
+              <div class="commodity-bar" style="width:${c.pct}%"></div>
+            </div>
+            <div class="commodity-meta">${c.meta}</div>
+          </div>`).join("")}
+        <div style="font-size:11px;color:var(--text3);margin-top:8px">
+          Bar width = relative economic significance to GTA supply chain.
+          Hover each row for detail.
+        </div>
+      </div>
+      <div>
+        <div class="freight-col-title">Cascade risk — days until impact if rail stops</div>
+        <table class="cascade-table">
+          <thead>
+            <tr>
+              <th>Commodity</th>
+              <th>Time to impact</th>
+              <th>Consequence</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${CASCADE.map(c => `
+              <tr>
+                <td class="cascade-commodity">${c.commodity}</td>
+                <td class="cascade-days">
+                  <span class="cascade-days-pip pip-${c.sev}"></span>${c.days}
+                </td>
+                <td>${c.impact}</td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="jet-callout">
+      <strong>&#9888; Cross-sector cascade:</strong>
+      CN&rsquo;s Malport Yard (Mississauga) houses the <strong>Jet Fuel Rail Offloading,
+      Storage and Distribution Facility</strong> that supplies Pearson International Airport.
+      A CN labour stoppage is not just a freight event &mdash; it is a direct threat to Pearson
+      fuel supply within 3&ndash;5 days, creating a live link between the
+      <em>CN Freight Labour Risk</em> card and the <em>Pearson Airport Operations</em> card.
+      No other public Toronto infrastructure dashboard documents this dependency.
+    </div>`;
+
+  return panel;
 }
 
 function render(data) {
@@ -1115,6 +1410,11 @@ function render(data) {
       appendCardGrid(sec, noTier);
     }
 
+    // Freight profile panel — Transport & Logistics sector only
+    if(sKey === "transport_logistics") {
+      sec.appendChild(buildFreightPanel());
+    }
+
     sectorsEl.appendChild(sec);
   }
 
@@ -1133,7 +1433,7 @@ function render(data) {
   document.getElementById("footer-sources").textContent =
     "Sources: IESO · Bank of Canada · StatsCan · Toronto Open Data · Environment Canada · data.ontario.ca · open.canada.ca · NAV Canada · Toronto Police ASR · Stooq · Stockr · EIA";
   document.getElementById("footer-run").textContent =
-    `TII v3.2 · scraper run ${rdFull} · auto-refresh every 6 hours`;
+    `TII v3.4 · scraper run ${rdFull} · auto-refresh every 6 hours`;
 }
 
 function showError(msg) {
