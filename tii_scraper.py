@@ -477,10 +477,27 @@ def fetch_brent_crude():
             if len(parts) >= 2 and parts[1].strip() not in ("", ".", "N/D"):
                 date_str = parts[0].strip()
                 price = round(float(parts[1].strip()), 2)
+                # Calculate calendar days since data date to explain lag on card
+                try:
+                    from datetime import date as _date
+                    data_dt = _date.fromisoformat(date_str)
+                    lag_days = (_date.today() - data_dt).days
+                    # EIA publishes 1 business day behind; weekends add 2 more.
+                    # Up to 4 calendar days lag is normal (e.g. Sunday showing Friday).
+                    if lag_days <= 4:
+                        lag_note = (f"Data date: {date_str} "
+                                    f"({lag_days}d ago -- EIA spot price, "
+                                    f"normal 1-4 day lag on weekends).")
+                    else:
+                        lag_note = (f"Data date: {date_str} "
+                                    f"({lag_days}d ago -- may be stale, "
+                                    f"check EIA publication schedule).")
+                except Exception:
+                    lag_note = f"Data date: {date_str}."
                 return [_ok("Brent Crude Price", price, "USD/bbl",
                             "EIA via datasets/oil-prices (GitHub)", datahub_url,
                             date_str,
-                            NOTES_TEMPLATE.format(
+                            lag_note + " " + NOTES_TEMPLATE.format(
                                 source="EIA Brent spot price mirrored daily at "
                                        "datasets/oil-prices on GitHub"))]
         errors.append("datahub: all rows missing or null")
