@@ -2152,41 +2152,22 @@ def fetch_enbridge_operational_status():
                 "Key path to check: Dawn to Parkway (primary GTA supply corridor)."
             )]
 
-        # Determine overall severity
-        # Red — firm services impacted is most severe
-        if "firm services impacted" in text:
-            severity = 2
-            status_label = "Firm services impacted — supply constraint active"
-        elif "interruptible services potentially impacted" in text:
-            severity = 1
-            status_label = "Interruptible services potentially impacted"
-        elif "no capacity constraints" in text:
-            severity = 0
-            status_label = "No capacity constraints"
-        else:
-            severity = 0
-            status_label = "Status parsed — no constraint language found"
-
-        # Check specifically for Dawn-Parkway mention
-        dawn_parkway_note = ""
-        if "dawn" in text and ("parkway" in text or "dawn to parkway" in text):
-            if "firm" in text:
-                dawn_parkway_note = " Dawn-to-Parkway path mentioned with firm constraint."
-            elif "interruptible" in text:
-                dawn_parkway_note = " Dawn-to-Parkway path mentioned with interruptible constraint."
-
-        notes = (
-            f"{status_label}.{dawn_parkway_note} "
-            f"Enbridge Gas operates the Dawn Hub (largest integrated underground "
-            f"storage in Canada, ~284 Bcf capacity) and the Dawn-Parkway pipeline "
-            f"(primary natural gas supply corridor for GTA). "
-            f"Severity: 0=No constraints, 1=Interruptible impacted, 2=Firm services impacted. "
-            f"Source: Enbridge Gas operational-status page (daily 4-day outlook)."
-        )
-
-        return [_ok("Enbridge Dawn System Status", severity, "",
-                    "Enbridge Gas — operational-status", URL,
-                    str(date.today()), notes)]
+        # The Enbridge operational status page lists all three traffic light labels
+        # ("No capacity constraints", "Interruptible services potentially impacted",
+        # "Firm services impacted") as static legend text regardless of current state.
+        # A static HTTP fetch cannot distinguish which light is currently active
+        # without JavaScript rendering. Return manual with retrieval instructions.
+        return [_manual(
+            "Enbridge Dawn System Status",
+            "Enbridge Gas — operational-status page",
+            "Page traffic light requires JavaScript rendering to determine active state. "
+            "Manual check: enbridgegas.com/storage-transportation/operational-information/operational-status "
+            "Three states: Green=No capacity constraints, "
+            "Yellow=Interruptible services potentially impacted, "
+            "Red=Firm services impacted. "
+            "Key path for GTA: Dawn to Parkway. "
+            "Subscribe to email alerts at the Enbridge operational information page."
+        )]
 
     except Exception as e:
         return [_err("Enbridge Dawn System Status",
