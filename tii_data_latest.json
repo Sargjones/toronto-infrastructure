@@ -1,5 +1,5 @@
 {
-  "run_timestamp": "2026-03-23T00:28:24.644440Z",
+  "run_timestamp": "2026-03-23T01:59:43.149520Z",
   "run_date": "2026-03-23",
   "sector_filter": null,
   "totals": {
@@ -16,7 +16,7 @@
       "unit": "MW",
       "source": "IESO GenOutputbyFuelHourly",
       "url": "https://reports-public.ieso.ca/public/GenOutputbyFuelHourly/PUB_GenOutputbyFuelHourly_2026.xml",
-      "retrieved_at": "2026-03-23T00:28:06.902817Z",
+      "retrieved_at": "2026-03-23T01:59:35.478575Z",
       "data_date": "2026-03-23",
       "status": "ok",
       "notes": "Tier 3 — Local real-time delivery. Hour ending 24:00 UTC. Mix: NUCLEAR: 9948MW, HYDRO: 3819MW, GAS: 2864MW, WIND: 1342MW, BIOFUEL: 51MW, OTHER: 10MW, SOLAR: 0MW. Chain terminus: Brent/NGAS (Tier 1) → TCPL utilization (Tier 2) → IESO dispatch / pump price (Tier 3)."
@@ -27,7 +27,7 @@
       "unit": "MW",
       "source": "IESO GenOutputbyFuelHourly",
       "url": "https://reports-public.ieso.ca/public/GenOutputbyFuelHourly/PUB_GenOutputbyFuelHourly_2026.xml",
-      "retrieved_at": "2026-03-23T00:28:06.902822Z",
+      "retrieved_at": "2026-03-23T01:59:35.478581Z",
       "data_date": "2026-03-23",
       "status": "ok",
       "notes": "Hour ending 24:00 UTC."
@@ -38,7 +38,7 @@
       "unit": "MW",
       "source": "IESO GenOutputbyFuelHourly",
       "url": "https://reports-public.ieso.ca/public/GenOutputbyFuelHourly/PUB_GenOutputbyFuelHourly_2026.xml",
-      "retrieved_at": "2026-03-23T00:28:06.902824Z",
+      "retrieved_at": "2026-03-23T01:59:35.478583Z",
       "data_date": "2026-03-23",
       "status": "ok",
       "notes": "Hour ending 24:00 UTC."
@@ -49,7 +49,7 @@
       "unit": "MW",
       "source": "IESO GenOutputbyFuelHourly",
       "url": "https://reports-public.ieso.ca/public/GenOutputbyFuelHourly/PUB_GenOutputbyFuelHourly_2026.xml",
-      "retrieved_at": "2026-03-23T00:28:06.902827Z",
+      "retrieved_at": "2026-03-23T01:59:35.478586Z",
       "data_date": "2026-03-23",
       "status": "ok",
       "notes": "Tier 3 — Local real-time delivery. Gas peakers are marginal-cost units dispatched when baseload (nuclear/hydro) is insufficient. Output >3,000 MW = demand stress; >5,000 MW = grid under significant pressure. Elevated gas dispatch correlates with higher wholesale electricity prices and increased exposure to Tier 1/2 commodity risk. Hour ending 24:00 UTC."
@@ -60,7 +60,7 @@
       "unit": "MW",
       "source": "IESO GenOutputbyFuelHourly",
       "url": "https://reports-public.ieso.ca/public/GenOutputbyFuelHourly/PUB_GenOutputbyFuelHourly_2026.xml",
-      "retrieved_at": "2026-03-23T00:28:06.902828Z",
+      "retrieved_at": "2026-03-23T01:59:35.478588Z",
       "data_date": "2026-03-23",
       "status": "ok",
       "notes": "Hour ending 24:00 UTC."
@@ -71,7 +71,7 @@
       "unit": "MW",
       "source": "IESO GenOutputbyFuelHourly",
       "url": "https://reports-public.ieso.ca/public/GenOutputbyFuelHourly/PUB_GenOutputbyFuelHourly_2026.xml",
-      "retrieved_at": "2026-03-23T00:28:06.902833Z",
+      "retrieved_at": "2026-03-23T01:59:35.478593Z",
       "data_date": "2026-03-23",
       "status": "ok",
       "notes": "Hour ending 24:00 UTC."
@@ -82,7 +82,7 @@
       "unit": "MW",
       "source": "IESO GenOutputbyFuelHourly",
       "url": "https://reports-public.ieso.ca/public/GenOutputbyFuelHourly/PUB_GenOutputbyFuelHourly_2026.xml",
-      "retrieved_at": "2026-03-23T00:28:06.902835Z",
+      "retrieved_at": "2026-03-23T01:59:35.478595Z",
       "data_date": "2026-03-23",
       "status": "ok",
       "notes": "Hour ending 24:00 UTC."
@@ -93,7 +93,7 @@
       "unit": "MW",
       "source": "IESO Ontario Demand Multiday",
       "url": "https://www.ieso.ca/-/media/Files/IESO/Power-Data/Ontario-Demand-multiday.ashx",
-      "retrieved_at": "2026-03-23T00:28:07.149355Z",
+      "retrieved_at": "2026-03-23T01:59:35.910443Z",
       "data_date": "2026-03-23",
       "status": "ok",
       "notes": ""
@@ -104,7 +104,7 @@
       "unit": "% of 2024 peak",
       "source": "IESO Ontario Demand Multiday",
       "url": "https://www.ieso.ca/-/media/Files/IESO/Power-Data/Ontario-Demand-multiday.ashx",
-      "retrieved_at": "2026-03-23T00:28:07.149367Z",
+      "retrieved_at": "2026-03-23T01:59:35.910458Z",
       "data_date": "2026-03-23",
       "status": "ok",
       "notes": "13513.1 MW ÷ 25000 MW × 100"
@@ -115,7 +115,7 @@
       "unit": "% utilized",
       "source": "CER — TransCanada Mainline",
       "url": "https://www.cer-rec.gc.ca/open/energy/throughput-capacity/tcpl-mainline-throughput-and-capacity.csv",
-      "retrieved_at": "2026-03-23T00:28:16.404719Z",
+      "retrieved_at": "2026-03-23T01:59:38.151730Z",
       "data_date": "2025-12-31",
       "status": "ok",
       "notes": "Tier 2 — Continental supply chain. TCPL Mainline moves western Canadian gas east across Ontario. Elevated utilization here precedes Tier 3 stress (IESO gas peaker dispatch, Toronto pump price) by days to weeks. Chain: Brent/NGAS (Tier 1) → TCPL utilization (Tier 2) → IESO gas output / pump price (Tier 3). Throughput: 59,003 / Capacity: 101,188 (1000 m³/day). Utilization: 58.3%. 7-day avg: 53.2%. Normal range 50-80%. Warn >85% (near capacity), Alert >95% (emergency risk). ⚠ Data lag: CER publishes quarterly (~3 month lag). Source: CER open data (TransCanada Mainline throughput CSV)."
@@ -126,7 +126,7 @@
       "unit": "% utilized",
       "source": "CER — TransCanada Mainline",
       "url": "https://www.cer-rec.gc.ca/open/energy/throughput-capacity/tcpl-mainline-throughput-and-capacity.csv",
-      "retrieved_at": "2026-03-23T00:28:16.404760Z",
+      "retrieved_at": "2026-03-23T01:59:38.151802Z",
       "data_date": "2025-12-31",
       "status": "ok",
       "notes": "Tier 2 — Continental supply chain. Northern Ontario Line transits gas from western fields toward Parkway/GTA. Upstream constraint here feeds into Parkway pressure before reaching Toronto-area consumers and IESO gas peakers (Tier 3). Throughput: 64,351 / Capacity: 99,058 (1000 m³/day). Utilization: 65.0%. 7-day avg: 67.1%. Normal range 50-80%. Warn >85% (near capacity), Alert >95% (emergency risk). ⚠ Data lag: CER publishes quarterly (~3 month lag). Source: CER open data (TransCanada Mainline throughput CSV)."
@@ -137,7 +137,7 @@
       "unit": "USD/bbl",
       "source": "EIA via datasets/oil-prices (GitHub)",
       "url": "https://raw.githubusercontent.com/datasets/oil-prices/main/data/brent-daily.csv",
-      "retrieved_at": "2026-03-23T00:28:16.499820Z",
+      "retrieved_at": "2026-03-23T01:59:38.274189Z",
       "data_date": "2026-03-16",
       "status": "alert",
       "notes": "Tier 1 - Global commodity. ICE Brent crude: global benchmark for ~2/3 of world oil trade. Ontario supply chain: Brent (Tier 1) -> TCPL pipeline utilization (Tier 2) -> Toronto pump price / IESO gas dispatch (Tier 3). CAD/USD amplifies or dampens pass-through to Ontario consumers. Warn >$80/bbl (refinery margin pressure), Alert >$100/bbl (Hormuz disruption threshold). Source: EIA Brent spot price mirrored daily at datasets/oil-prices on GitHub.",
@@ -149,7 +149,7 @@
       "unit": "active outages",
       "source": "Toronto Water — No Water Map (ArcGIS)",
       "url": "https://services3.arcgis.com/b9WvedVPoizGfvfD/arcgis/rest/services/COT_Geospatial_Water_Outage_View/FeatureServer/0/query?where=DateandTimeServiceRestored = NULL AND WaterOutageEdit7b_Bypass <> 1&outFields=*&f=geojson&returnGeometry=false",
-      "retrieved_at": "2026-03-23T00:28:16.671831Z",
+      "retrieved_at": "2026-03-23T01:59:38.524150Z",
       "data_date": "2026-03-23",
       "status": "ok",
       "notes": "Breaks: 0, Planned maintenance: 0, Other: 0. Oldest active since: unknown. Source: toronto.ca/no-water-map — real-time feed."
@@ -160,7 +160,7 @@
       "unit": "active advisories",
       "source": "Toronto Water — toronto.ca",
       "url": "https://www.toronto.ca/services-payments/water-environment/tap-water-in-toronto/",
-      "retrieved_at": "2026-03-23T00:28:16.835402Z",
+      "retrieved_at": "2026-03-23T01:59:38.727888Z",
       "data_date": "2026-03-23",
       "status": "ok",
       "notes": "No active boil water advisories detected. Toronto's 4 treatment plants serve ~4M people. An advisory would appear at toronto.ca/tap-water."
@@ -171,7 +171,7 @@
       "unit": null,
       "source": "unknown",
       "url": "unknown",
-      "retrieved_at": "2026-03-23T00:28:16.836208Z",
+      "retrieved_at": "2026-03-23T01:59:38.728969Z",
       "data_date": null,
       "status": "error",
       "notes": "ERROR: name '_ckan_package' is not defined"
@@ -182,7 +182,7 @@
       "unit": null,
       "source": "data.ontario.ca / Health Quality Ontario",
       "url": null,
-      "retrieved_at": "2026-03-23T00:28:17.103364Z",
+      "retrieved_at": "2026-03-23T01:59:39.034091Z",
       "data_date": null,
       "status": "manual",
       "notes": "Dataset exists but has no downloadable files (data in reporting portal). Manual retrieval: health.gov.on.ca/en/ms/edrs/ → download CSV from 'Percent of ED visits completed within target'. Or check data.ontario.ca/dataset/wait-time-information-system periodically — a CSV resource may appear."
@@ -193,7 +193,7 @@
       "unit": null,
       "source": "PHAC Wastewater Dashboard",
       "url": null,
-      "retrieved_at": "2026-03-23T00:28:17.299440Z",
+      "retrieved_at": "2026-03-23T01:59:39.252890Z",
       "data_date": null,
       "status": "manual",
       "notes": "SPA — visit health-infobase.canada.ca/wastewater/ → DevTools → Network → find JSON/CSV endpoint. Levels: Low / Moderate / High."
@@ -204,7 +204,7 @@
       "unit": null,
       "source": "Public Health Ontario Respiratory Virus Tool",
       "url": null,
-      "retrieved_at": "2026-03-23T00:28:17.415337Z",
+      "retrieved_at": "2026-03-23T01:59:39.376873Z",
       "data_date": null,
       "status": "manual",
       "notes": "The COVID-era data.ontario.ca ICU dataset was discontinued Nov 14, 2024. CCSO data is restricted to authorized hospital users (PHIPA). Manual retrieval: publichealthontario.ca → Data & Analysis → Respiratory Virus Tool → Hospital/ICU tab. Will auto-fetch if data.ontario.ca dataset is reinstated."
@@ -215,7 +215,7 @@
       "unit": "CPI index (2002=100)",
       "source": "StatsCan WDS API (Table 18-10-0004-01)",
       "url": "https://www150.statcan.gc.ca/t1/wds/rest/getDataFromVectorsAndLatestNPeriods",
-      "retrieved_at": "2026-03-23T00:28:17.960851Z",
+      "retrieved_at": "2026-03-23T01:59:39.930429Z",
       "data_date": "2026-02-01",
       "status": "ok",
       "notes": "Vector v41690973. Canada-wide, not seasonally adjusted. Released ~6 weeks after reference month."
@@ -226,7 +226,7 @@
       "unit": "CPI index (2002=100)",
       "source": "StatsCan WDS API (Table 18-10-0004-01)",
       "url": "https://www150.statcan.gc.ca/t1/wds/rest/getDataFromVectorsAndLatestNPeriods",
-      "retrieved_at": "2026-03-23T00:28:17.960861Z",
+      "retrieved_at": "2026-03-23T01:59:39.930439Z",
       "data_date": "2025-01-01",
       "status": "ok",
       "notes": "Vector v41693271. Canada-wide, not seasonally adjusted. Released ~6 weeks after reference month."
@@ -237,7 +237,7 @@
       "unit": null,
       "source": "unknown",
       "url": "unknown",
-      "retrieved_at": "2026-03-23T00:28:18.280695Z",
+      "retrieved_at": "2026-03-23T01:59:40.119867Z",
       "data_date": null,
       "status": "error",
       "notes": "ERROR: 'NoneType' object is not subscriptable"
@@ -248,7 +248,7 @@
       "unit": null,
       "source": "unknown",
       "url": "unknown",
-      "retrieved_at": "2026-03-23T00:28:18.280959Z",
+      "retrieved_at": "2026-03-23T01:59:40.120132Z",
       "data_date": null,
       "status": "error",
       "notes": "ERROR: name '_ckan_package' is not defined"
@@ -259,7 +259,7 @@
       "unit": "AQHI (1-10+)",
       "source": "Environment Canada AQHI — Toronto",
       "url": "https://weather.gc.ca/airquality/pages/onaq-001_e.html",
-      "retrieved_at": "2026-03-23T00:28:21.837735Z",
+      "retrieved_at": "2026-03-23T01:59:40.262182Z",
       "data_date": "2026-03-23",
       "status": "ok",
       "notes": "Risk: Low Risk. Alert threshold: AQHI ≥ 4."
@@ -270,7 +270,7 @@
       "unit": "%",
       "source": "Bank of Canada (known value — Valet API series not resolved)",
       "url": "",
-      "retrieved_at": "2026-03-23T00:28:22.267248Z",
+      "retrieved_at": "2026-03-23T01:59:40.718845Z",
       "data_date": "2025-10-29",
       "status": "ok",
       "notes": "⚠ Valet API series name unresolved. Known: 2.25% since Oct 29, 2025. Verify at bankofcanada.ca/valet/docs"
@@ -281,7 +281,7 @@
       "unit": "USD/CAD",
       "source": "Bank of Canada Valet API (FXUSDCAD)",
       "url": "https://www.bankofcanada.ca/valet/observations/FXUSDCAD/json?recent=5",
-      "retrieved_at": "2026-03-23T00:28:22.308664Z",
+      "retrieved_at": "2026-03-23T01:59:40.740027Z",
       "data_date": "2026-03-16",
       "status": "ok",
       "notes": "Daily closing rate (-0.0024 vs prev day). Alert threshold: >1.45 (elevated tariff/import stress). Published 16:30 ET on business days."
@@ -292,7 +292,7 @@
       "unit": "¢/L",
       "source": "Stockr.net — daily Toronto pump price",
       "url": "https://stockr.net/toronto/gasprice.aspx",
-      "retrieved_at": "2026-03-23T00:28:22.451535Z",
+      "retrieved_at": "2026-03-23T01:59:40.900892Z",
       "data_date": "2026-03-23",
       "status": "warn",
       "notes": "Tier 3 — Local real-time delivery. Regular unleaded, includes all taxes. Daily forecast from commodity markets. Supply chain: Brent crude (Tier 1) → TCPL pipeline utilization (Tier 2) → Toronto pump price (Tier 3). CAD/USD rate amplifies or dampens pass-through. Source: stockr.net (Canadian, daily at 11am). Warn >150¢/L, Alert >185¢/L.",
@@ -304,7 +304,7 @@
       "unit": null,
       "source": "StatsCan WDS (Table 14-10-0294-01)",
       "url": "https://www150.statcan.gc.ca/t1/wds/rest/getDataFromCubePidCoordAndLatestNPeriods",
-      "retrieved_at": "2026-03-23T00:28:22.619159Z",
+      "retrieved_at": "2026-03-23T01:59:41.061614Z",
       "data_date": null,
       "status": "error",
       "notes": "ERROR: 406 Client Error:  for url: https://www150.statcan.gc.ca/t1/wds/rest/getDataFromCubePidCoordAndLatestNPeriods"
@@ -315,7 +315,7 @@
       "unit": "%",
       "source": "TRREB Quick Market Overview",
       "url": "https://trreb.ca/market-data/quick-market-overview/",
-      "retrieved_at": "2026-03-23T00:28:23.736451Z",
+      "retrieved_at": "2026-03-23T01:59:42.110598Z",
       "data_date": "Feb'26",
       "status": "ok",
       "notes": "Buyer'S Market — SNR of 36% (prior period: 32%). Avg price $1,008,968 (-7.1% YoY). Sales 3,868 (-6.3% YoY). New listings 10,705 (-17.7% YoY). Reference: Feb'26. SNR guide: <40% buyer's, 40-60% balanced, >60% seller's market."
@@ -326,7 +326,7 @@
       "unit": "CAD",
       "source": "TRREB Quick Market Overview",
       "url": "https://trreb.ca/market-data/quick-market-overview/",
-      "retrieved_at": "2026-03-23T00:28:23.736458Z",
+      "retrieved_at": "2026-03-23T01:59:42.110608Z",
       "data_date": "Feb'26",
       "status": "ok",
       "notes": "GTA all residential. Avg price $1,008,968 (-7.1% YoY)."
@@ -337,7 +337,7 @@
       "unit": "filings/month (Ontario)",
       "source": "OSB Canada — open.canada.ca",
       "url": "https://ised-isde.canada.ca/site/office-superintendent-bankruptcy/sites/default/files/documents/insolvency_statistiques_insolvabilite_jan_2026.xlsx",
-      "retrieved_at": "2026-03-23T00:28:24.300103Z",
+      "retrieved_at": "2026-03-23T01:59:42.777743Z",
       "data_date": "jan/janv",
       "status": "ok",
       "notes": "Ontario consumer insolvencies. Canada 2025: 140,457 annual (~11,705/month). Ontario 2025: 52,838 (~4,403/month)."
@@ -403,7 +403,7 @@
       "unit": null,
       "source": "CER / Statistics Canada — Monthly Natural Gas Storage",
       "url": null,
-      "retrieved_at": "2026-03-23T00:28:24.644200Z",
+      "retrieved_at": "2026-03-23T01:59:43.149243Z",
       "data_date": null,
       "status": "manual",
       "notes": "Total Ontario underground storage at Dawn + Tecumseh pools (Enbridge). Total capacity: 387 Bcf. Eastern Canada 5-yr average ~300 Bcf at peak. Warn: <150 Bcf entering winter (Oct). Alert: <100 Bcf. Manual update: cer-rec.gc.ca market-snapshots for latest CER storage snapshot. Pending automated endpoint."
@@ -414,7 +414,7 @@
       "unit": null,
       "source": "Toronto Hydro Outage Map (KUBRA StormCenter)",
       "url": null,
-      "retrieved_at": "2026-03-23T00:28:24.644205Z",
+      "retrieved_at": "2026-03-23T01:59:43.149252Z",
       "data_date": null,
       "status": "manual",
       "notes": "KUBRA StormCenter API confirmed but data endpoints require auth. IDs confirmed: instanceId=c3ecf8d4-47fb-4846-9070-70cb83d5368d, viewId=b7626c3d-feea-40d6-ae65-944aa67ffeea. Manual: outagemap.torontohydro.com — updated every 10 min. Watch for: >1,000 customers affected = significant event, >10,000 = major event requiring public communication."
@@ -425,7 +425,7 @@
       "unit": null,
       "source": "IESO Reliability Outlook (quarterly PDF)",
       "url": null,
-      "retrieved_at": "2026-03-23T00:28:24.644207Z",
+      "retrieved_at": "2026-03-23T01:59:43.149253Z",
       "data_date": null,
       "status": "manual",
       "notes": "ieso.ca → Planning and Forecasting → Reliability Outlook → latest PDF. Find 'Reserve Above Requirement' figure. Update quarterly."
@@ -436,7 +436,7 @@
       "unit": null,
       "source": "City of Toronto WWTP Annual Reports (annual PDF)",
       "url": null,
-      "retrieved_at": "2026-03-23T00:28:24.644209Z",
+      "retrieved_at": "2026-03-23T01:59:43.149255Z",
       "data_date": null,
       "status": "manual",
       "notes": "toronto.ca WWTP reports → download all 4 plant PDFs (~March 31). Section B = ECA compliance table."
@@ -447,7 +447,7 @@
       "unit": null,
       "source": "Canadian Blood Services",
       "url": null,
-      "retrieved_at": "2026-03-23T00:28:24.644210Z",
+      "retrieved_at": "2026-03-23T01:59:43.149257Z",
       "data_date": null,
       "status": "manual",
       "notes": "No public API. blood.ca for status. Contact media@blood.ca."
@@ -458,7 +458,7 @@
       "unit": null,
       "source": "Daily Bread Food Bank (quarterly PDF)",
       "url": null,
-      "retrieved_at": "2026-03-23T00:28:24.644212Z",
+      "retrieved_at": "2026-03-23T01:59:43.149259Z",
       "data_date": null,
       "status": "manual",
       "notes": "dailybread.ca/research-and-advocacy/ → quarterly reports."
@@ -469,7 +469,7 @@
       "unit": null,
       "source": "LTB Quarterly Statistics PDF",
       "url": null,
-      "retrieved_at": "2026-03-23T00:28:24.644214Z",
+      "retrieved_at": "2026-03-23T01:59:43.149260Z",
       "data_date": null,
       "status": "manual",
       "notes": "tribunalsontario.ca/ltb/resources/ → Statistics PDF."
@@ -480,7 +480,7 @@
       "unit": null,
       "source": "Toronto Water Source Monitoring Reports",
       "url": null,
-      "retrieved_at": "2026-03-23T00:28:24.644215Z",
+      "retrieved_at": "2026-03-23T01:59:43.149261Z",
       "data_date": null,
       "status": "manual",
       "notes": "toronto.ca/services-payments/water-environment/water-treatment/drinking-water-quality-monitoring-reports/"
@@ -491,14 +491,14 @@
       "unit": null,
       "source": "Port of Montreal Statistics",
       "url": null,
-      "retrieved_at": "2026-03-23T00:28:24.644216Z",
+      "retrieved_at": "2026-03-23T01:59:43.149263Z",
       "data_date": null,
       "status": "manual",
       "notes": "port-montreal.com/en/operations/port-statistics → monthly PDF."
     }
   ],
   "ieso_generators": {
-    "retrieved_at": "2026-03-23T00:28:06.902742Z",
+    "retrieved_at": "2026-03-23T01:59:35.478465Z",
     "data_date": "2026-03-23",
     "hour": 24,
     "source_url": "https://reports-public.ieso.ca/public/GenOutputbyFuelHourly/PUB_GenOutputbyFuelHourly_2026.xml",
