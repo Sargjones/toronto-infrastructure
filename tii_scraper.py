@@ -461,12 +461,14 @@ def fetch_brent_crude():
     # ── Source 1: FRED DCOILBRENTEU ───────────────────────────────────────────
     # CSV endpoint — no API key, returns full history, last row = most recent business day
     fred_url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DCOILBRENTEU"
+    fred_error = "FRED: not attempted"
     try:
         r = SESSION.get(fred_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=TIMEOUT)
         r.raise_for_status()
         lines = r.text.strip().splitlines()
         # Header: DATE,DCOILBRENTEU
         # Rows: 1987-05-20,18.63  — missing values shown as "."
+        fred_error = "FRED: all rows missing or null"
         for row in reversed(lines[1:]):
             parts = row.split(",")
             if len(parts) == 2 and parts[1].strip() not in ("", ".", "N/D"):
@@ -474,11 +476,11 @@ def fetch_brent_crude():
                 price = round(float(parts[1].strip()), 2)
                 return [_ok("Brent Crude Price", price, "USD/bbl",
                             "FRED — DCOILBRENTEU (St. Louis Fed)", fred_url, date_str,
-                            NOTES_TEMPLATE.format(source="FRED DCOILBRENTEU — St. Louis Federal Reserve, daily ICE Brent spot price"))]
+                            NOTES_TEMPLATE.format(
+                                source="FRED DCOILBRENTEU — St. Louis Federal Reserve, "
+                                       "daily ICE Brent spot price"))]
     except Exception as e:
-        fred_error = str(e)
-    else:
-        fred_error = "All FRED rows missing/null"
+        fred_error = f"FRED: {e}"
 
     # ── Source 2 & 3: Stooq CSV fallback ─────────────────────────────────────
     stooq_candidates = [
