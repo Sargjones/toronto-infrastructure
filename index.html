@@ -246,7 +246,7 @@
     font-size: 11px; line-height: 1.55; color: var(--text2);
     box-shadow: 0 4px 20px rgba(0,0,0,0.15);
     z-index: 100;
-    pointer-events: none;
+    pointer-events: auto;
     white-space: normal;
   }
   .tooltip-scraper {
@@ -272,7 +272,7 @@
   /* Nudge left/right when centered tooltip would overflow viewport edges */
   .card-tooltip.nudge-left  { left: auto; right: -6px;  transform: none; }
   .card-tooltip.nudge-right { left: -6px; transform: none; }
-  .card:hover .card-tooltip { display: block; }
+  /* tooltip shown/hidden via JS mouseenter/mouseleave — see script */
 
   /* Ensure cards in the last grid row don't clip their tooltip */
   .cards { overflow: visible; }
@@ -1325,6 +1325,60 @@ async function loadData() {
 }
 
 loadData();
+
+// ── Tooltip hover with grace period ──────────────────────────────────────────
+// pointer-events: auto on tooltip means mouse can enter it to scroll.
+// hideDelay gives the mouse time to travel from card into tooltip.
+(function() {
+  var HIDE_DELAY = 120; // ms grace period to move mouse into tooltip
+  document.addEventListener("mouseover", function(e) {
+    var card = e.target.closest(".card");
+    if(!card) return;
+    var tip = card.querySelector(".card-tooltip");
+    if(!tip) return;
+    clearTimeout(card._hideTimer);
+    tip.style.display = "block";
+    // Flip/nudge correction on first show
+    if(!card._positioned) {
+      card._positioned = true;
+      var r = tip.getBoundingClientRect();
+      if(r.top < 4)                        tip.classList.add("flip-down");
+      if(r.right > window.innerWidth - 4)  tip.classList.add("nudge-left");
+      else if(r.left < 4)                  tip.classList.add("nudge-right");
+    }
+  });
+  document.addEventListener("mouseout", function(e) {
+    var card = e.target.closest(".card");
+    if(!card) return;
+    var tip = card.querySelector(".card-tooltip");
+    if(!tip) return;
+    // Only hide if mouse left both card AND tooltip
+    var to = e.relatedTarget;
+    if(to && (card.contains(to) || tip.contains(to))) return;
+    card._hideTimer = setTimeout(function() {
+      tip.style.display = "none";
+    }, HIDE_DELAY);
+  });
+  // If mouse enters tooltip, cancel the hide timer
+  document.addEventListener("mouseover", function(e) {
+    var tip = e.target.closest(".card-tooltip");
+    if(!tip) return;
+    var card = tip.closest(".card");
+    if(card) clearTimeout(card._hideTimer);
+  });
+  // If mouse leaves tooltip entirely (not back into card), hide
+  document.addEventListener("mouseout", function(e) {
+    var tip = e.target.closest(".card-tooltip");
+    if(!tip) return;
+    var card = tip.closest(".card");
+    if(!card) return;
+    var to = e.relatedTarget;
+    if(to && (card.contains(to) || tip.contains(to))) return;
+    card._hideTimer = setTimeout(function() {
+      tip.style.display = "none";
+    }, HIDE_DELAY);
+  });
+})();
 </script>
 </body>
 </html>
