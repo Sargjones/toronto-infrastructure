@@ -444,12 +444,13 @@ def fetch_brent_crude():
       Tier 3 -> Toronto pump price / IESO gas peaker dispatch (local real-time delivery)
 
     Sources tried in order:
-      1. datasets/oil-prices (GitHub raw) - EIA Brent daily CSV mirrored on GitHub.
-         raw.githubusercontent.com is always reachable from GitHub Actions.
-         Updated daily from EIA. Format: Date,Price (USD/bbl).
-      2. FRED (St. Louis Fed) - DCOILBRENTEU series. No API key required.
-         May be blocked or rate-limited in some CI environments.
-      3. Stooq.com - cb.f ticker. No API key, non-US jurisdiction.
+      1. Yahoo Finance (BZ=F) - ICE Brent front-month futures, near-real-time.
+         No API key. ~15 min delay. Works from GitHub Actions.
+         Critical during fast-moving geopolitical events.
+      2. datasets/oil-prices (GitHub raw) - EIA Brent spot, mirrored daily.
+         1-3 day lag. Always reachable from Actions.
+      3. FRED DCOILBRENTEU - EIA spot via St. Louis Fed. 1-2 day lag.
+      4. Stooq cb.f - ICE Brent futures. No API key, non-US jurisdiction.
     """
     NOTES_TEMPLATE = (
         "Tier 1 - Global commodity. ICE Brent crude: global benchmark for ~2/3 of world oil trade. "
@@ -462,9 +463,39 @@ def fetch_brent_crude():
 
     errors = []
 
-    # Source 1: datasets/oil-prices GitHub raw CSV
-    # Mirrored daily from EIA. Always reachable from GitHub Actions.
-    # Format: Date,Price  e.g. 2026-03-21,69.43
+    # Source 1: Yahoo Finance BZ=F (ICE Brent front-month futures, ~15 min delay)
+    # Returns JSON with regularMarketPrice field. No API key required.
+    # This is the most current source -- critical during geopolitical events.
+    yahoo_url = ("https://query1.finance.yahoo.com/v8/finance/chart/BZ=F"
+                 "?interval=1d&range=5d")
+    try:
+        r = SESSION.get(yahoo_url,
+                        headers={"User-Agent": "Mozilla/5.0",
+                                 "Accept": "application/json"},
+                        timeout=TIMEOUT)
+        r.raise_for_status()
+        data = r.json()
+        meta = data["chart"]["result"][0]["meta"]
+        price = round(float(meta["regularMarketPrice"]), 2)
+        # Use regularMarketTime (Unix timestamp) for the data date
+        import time as _time
+        ts = meta.get("regularMarketTime", 0)
+        if ts:
+            from datetime import datetime as _dt, timezone as _tz
+            date_str = _dt.fromtimestamp(ts, tz=_tz.utc).strftime("%Y-%m-%d")
+        else:
+            date_str = str(date.today())
+        return [_ok("Brent Crude Price", price, "USD/bbl",
+                    "Yahoo Finance - ICE Brent futures (BZ=F)", yahoo_url,
+                    date_str,
+                    f"Futures price (~15 min delay). " +
+                    NOTES_TEMPLATE.format(
+                        source="Yahoo Finance ICE Brent front-month futures (BZ=F), "
+                               "near-real-time"))]
+    except Exception as e:
+        errors.append(f"Yahoo BZ=F: {e}")
+
+    # Source 2: datasets/oil-prices GitHub raw CSV (EIA spot, 1-3 day lag)
     datahub_url = ("https://raw.githubusercontent.com/datasets/oil-prices"
                    "/main/data/brent-daily.csv")
     try:
@@ -477,23 +508,16 @@ def fetch_brent_crude():
             if len(parts) >= 2 and parts[1].strip() not in ("", ".", "N/D"):
                 date_str = parts[0].strip()
                 price = round(float(parts[1].strip()), 2)
-                # Calculate calendar days since data date to explain lag on card
                 try:
                     from datetime import date as _date
-                    data_dt = _date.fromisoformat(date_str)
-                    lag_days = (_date.today() - data_dt).days
-                    # EIA publishes 1 business day behind; weekends add 2 more.
-                    # Up to 4 calendar days lag is normal (e.g. Sunday showing Friday).
-                    if lag_days <= 4:
-                        lag_note = (f"Data date: {date_str} "
-                                    f"({lag_days}d ago -- EIA spot price, "
-                                    f"normal 1-4 day lag on weekends).")
-                    else:
-                        lag_note = (f"Data date: {date_str} "
-                                    f"({lag_days}d ago -- may be stale, "
-                                    f"check EIA publication schedule).")
+                    lag_days = (_date.today() - _date.fromisoformat(date_str)).days
+                    lag_note = (f"EIA spot price. Data date: {date_str} "
+                                f"({lag_days}d ago -- normal 1-4 day EIA publication lag)."
+                                if lag_days <= 4 else
+                                f"EIA spot price. Data date: {date_str} "
+                                f"({lag_days}d ago -- may be stale).")
                 except Exception:
-                    lag_note = f"Data date: {date_str}."
+                    lag_note = f"EIA spot price. Data date: {date_str}."
                 return [_ok("Brent Crude Price", price, "USD/bbl",
                             "EIA via datasets/oil-prices (GitHub)", datahub_url,
                             date_str,
@@ -504,7 +528,7 @@ def fetch_brent_crude():
     except Exception as e:
         errors.append(f"datahub: {e}")
 
-    # Source 2: FRED DCOILBRENTEU
+    # Source 3: FRED DCOILBRENTEU
     fred_url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DCOILBRENTEU"
     try:
         r = SESSION.get(fred_url, headers={"User-Agent": "Mozilla/5.0"},
@@ -526,7 +550,7 @@ def fetch_brent_crude():
     except Exception as e:
         errors.append(f"FRED: {e}")
 
-    # Source 3: Stooq cb.f
+    # Source 4: Stooq cb.f
     stooq_url = "https://stooq.com/q/d/l/?s=cb.f&i=d&l=5"
     try:
         r = SESSION.get(stooq_url, headers={"User-Agent": "Mozilla/5.0"},
@@ -547,7 +571,7 @@ def fetch_brent_crude():
     except Exception as e:
         errors.append(f"Stooq cb.f: {e}")
 
-    return [_err("Brent Crude Price", "EIA/FRED/Stooq", datahub_url,
+    return [_err("Brent Crude Price", "Yahoo/EIA/FRED/Stooq", yahoo_url,
                  " | ".join(errors))]
 
 
