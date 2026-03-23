@@ -118,6 +118,31 @@
     margin-bottom: 8px; padding-bottom: 6px;
     border-bottom: 0.5px solid var(--border);
   }
+
+  /* Tier sub-headers within sectors */
+  .tier-subheader {
+    font-size: 11px; font-weight: 600; letter-spacing: .04em;
+    text-transform: uppercase;
+    padding: 5px 0 5px 10px;
+    margin: 14px 0 8px;
+    border-left: 3px solid var(--tier-color, var(--border2));
+    color: var(--text2);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .tier-subheader:first-of-type { margin-top: 4px; }
+  .tier-subheader .tier-desc {
+    font-size: 10px; font-weight: 400; letter-spacing: .02em;
+    color: var(--text3); text-transform: none;
+  }
+  /* Tier colour tokens */
+  .tier-1 { --tier-color: #b8860b; }   /* gold  — global commodity   */
+  .tier-2 { --tier-color: #4a7fa5; }   /* steel blue — continental   */
+  .tier-3 { --tier-color: #4a8c5c; }   /* muted green — local        */
+  @media (prefers-color-scheme: dark) {
+    .tier-1 { --tier-color: #d4a94a; }
+    .tier-2 { --tier-color: #7ab3d4; }
+    .tier-3 { --tier-color: #7abf90; }
+  }
   .cards {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
@@ -685,6 +710,125 @@ function lookupKnowledge(indicatorName) {
   return null;
 }
 
+// ── Tier ontology ─────────────────────────────────────────────────────────────
+// Maps lowercase indicator substrings to tier numbers.
+// Matched longest-first (same pattern as lookupKnowledge).
+// Tier labels per sector are defined in TIER_META below.
+const TIER_MAP = {
+  // ENERGY
+  "brent crude":                    { tier: 1, sector: "energy" },
+  "tcpl parkway":                   { tier: 2, sector: "energy" },
+  "tcpl northern":                  { tier: 2, sector: "energy" },
+  "dawn hub":                       { tier: 2, sector: "energy" },
+  "total generation":               { tier: 3, sector: "energy" },
+  "nuclear output":                 { tier: 3, sector: "energy" },
+  "hydro output":                   { tier: 3, sector: "energy" },
+  "gas output":                     { tier: 3, sector: "energy" },
+  "wind output":                    { tier: 3, sector: "energy" },
+  "solar output":                   { tier: 3, sector: "energy" },
+  "biofuel output":                 { tier: 3, sector: "energy" },
+  "ontario demand":                 { tier: 3, sector: "energy" },
+  "peak demand":                    { tier: 3, sector: "energy" },
+  "fuel price":                     { tier: 3, sector: "energy" },
+  "toronto hydro active":           { tier: 3, sector: "energy" },
+  "grid reserve":                   { tier: 3, sector: "energy" },
+  // FINANCIAL
+  "cad/usd":                        { tier: 1, sector: "financial" },
+  "bank of canada":                 { tier: 1, sector: "financial" },
+  "grocery price":                  { tier: 2, sector: "financial" },
+  "all-items cpi":                  { tier: 2, sector: "financial" },
+  "monthly bankruptcy":             { tier: 2, sector: "financial" },
+  "toronto unemployment":           { tier: 3, sector: "financial" },
+  "trreb sales":                    { tier: 3, sector: "financial" },
+  "trreb average":                  { tier: 3, sector: "financial" },
+  "ltb eviction":                   { tier: 3, sector: "financial" },
+  // WATER
+  "boil water":                     { tier: 1, sector: "water" },
+  "lake ontario source":            { tier: 1, sector: "water" },
+  "active water outage":            { tier: 2, sector: "water" },
+  "active watermain":               { tier: 2, sector: "water" },
+  "planned maintenance outage":     { tier: 2, sector: "water" },
+  "watermain break rate":           { tier: 2, sector: "water" },
+  "shelter system capacity":        { tier: 3, sector: "water" },
+  "shelter occupancy":              { tier: 3, sector: "water" },
+  // HEALTH
+  "wastewater virus":               { tier: 1, sector: "health" },
+  "o-neg blood":                    { tier: 1, sector: "health" },
+  "ontario icu":                    { tier: 2, sector: "health" },
+  "er capacity":                    { tier: 2, sector: "health" },
+  "air quality":                    { tier: 3, sector: "health" },
+  "aqhi":                           { tier: 3, sector: "health" },
+  "wwtp eca":                       { tier: 3, sector: "health" },
+  // TRANSPORT
+  "pearson airport":                { tier: 1, sector: "transport" },
+  "port of montreal":               { tier: 2, sector: "transport" },
+  "ttc ridership":                  { tier: 3, sector: "transport" },
+  // PUBLIC SAFETY
+  "tps sworn":                      { tier: 1, sector: "public_safety" },
+  "tps civilian":                   { tier: 1, sector: "public_safety" },
+  "tps uniform fill":               { tier: 2, sector: "public_safety" },
+  "community safety command":       { tier: 3, sector: "public_safety" },
+  "specialized operations command": { tier: 3, sector: "public_safety" },
+  // FOOD
+  "grocery price inflation":        { tier: 1, sector: "food" },
+  "food bank":                      { tier: 2, sector: "food" },
+  // ENVIRONMENT
+  "toronto aqhi":                   { tier: 1, sector: "environment" },
+};
+
+// Per-sector tier label text shown in the sub-header
+const TIER_META = {
+  energy: {
+    1: "Global commodity",
+    2: "Continental supply chain",
+    3: "Local real-time delivery",
+  },
+  financial: {
+    1: "Global & monetary",
+    2: "Provincial transmission",
+    3: "Local household impact",
+  },
+  water: {
+    1: "Source & treatment",
+    2: "Distribution network",
+    3: "Social delivery",
+  },
+  health: {
+    1: "Population signal",
+    2: "System capacity",
+    3: "Community impact",
+  },
+  transport: {
+    1: "External gateway",
+    2: "Regional network",
+    3: "Local mobility",
+  },
+  public_safety: {
+    1: "Authorized strength",
+    2: "Deployment efficiency",
+    3: "Operational distribution",
+  },
+  food: {
+    1: "Price signal",
+    2: "Access & demand",
+    3: "Household impact",
+  },
+  environment: {
+    1: "Ambient conditions",
+    2: "Trend signal",
+    3: "Local impact",
+  },
+};
+
+function lookupTier(indicatorName) {
+  const n = (indicatorName || "").toLowerCase();
+  const keys = Object.keys(TIER_MAP).sort((a, b) => b.length - a.length);
+  for(const key of keys) {
+    if(n.includes(key)) return TIER_MAP[key];
+  }
+  return null;
+}
+
 function inferSector(name) {
   const n = (name||"").toLowerCase();
   if(/nuclear|hydro|gas output|wind|solar|biofuel|ontario demand|peak demand|generation|brent|storage|grid|reserve|tcpl|pipeline|parkway|mainline/.test(n)) return "energy";
@@ -868,24 +1012,64 @@ function render(data) {
 
   loadBrief((t.alert||0) > 0);
 
-  // After render: correct tooltips that would overflow the viewport
-  requestAnimationFrame(() => {
-    document.querySelectorAll(".card-tooltip").forEach(tip => {
-      // Make briefly visible at display:block to measure, then hide again
-      tip.style.display = "block";
-      const r = tip.getBoundingClientRect();
-      tip.style.display = "";
-
-      // Vertical: flip below card if tooltip goes above viewport top
-      if(r.top < 4) tip.classList.add("flip-down");
-
-      // Horizontal: nudge if centered tooltip overflows left or right edge
-      if(r.right > window.innerWidth - 4) tip.classList.add("nudge-left");
-      else if(r.left < 4)                 tip.classList.add("nudge-right");
-    });
-  });
   const sectorsEl = document.getElementById("sectors");
   sectorsEl.innerHTML = "";
+
+  // Build a single card element from a result object
+  function buildCard(r) {
+    const s = r.status || "manual";
+    const isManual = s === "manual" || r.value === null;
+    const card = document.createElement("div");
+    card.className = "card" + (s==="alert"?" is-alert":s==="warn"?" is-warn":isManual?" is-manual":"");
+
+    let noteHtml = "";
+    if(r.threshold_note && !isManual) {
+      noteHtml = `<div class="card-note">${r.threshold_note}</div>`;
+    }
+    const contextHtml = (r.context && !isManual)
+      ? `<div class="card-context">${r.context}</div>` : "";
+
+    // Tier badge from notes field (energy only — others use sub-headers now)
+    const tierBadge = inferTier(r.notes);
+    const tierHtml = tierBadge ? `<div class="card-tier">${tierBadge}</div>` : "";
+
+    // Tooltip: scraper notes + static knowledge
+    const scraperText = (r.notes || "").replace(/^Tier\s+\d+\s*[—\u2013\u2014-]\s*/i, "").trim();
+    const knowledge = lookupKnowledge(r.indicator);
+    const hasTooltip = scraperText || knowledge;
+
+    let tooltipInner = "";
+    if(scraperText) tooltipInner += `<div class="tooltip-scraper">${scraperText}</div>`;
+    if(knowledge) {
+      if(scraperText) tooltipInner += `<hr class="tooltip-divider">`;
+      tooltipInner += `<div class="tooltip-knowledge-title">${knowledge.title}</div>`;
+      tooltipInner += `<div class="tooltip-knowledge-body">${knowledge.body}</div>`;
+    }
+    const infoHtml = hasTooltip
+      ? `<div class="card-info-btn" aria-label="Notes">i</div>
+         <div class="card-tooltip">${tooltipInner}</div>` : "";
+
+    card.innerHTML = `
+      <div class="card-dot ${dotClass(s)}"></div>
+      <div class="card-label">${r.indicator}</div>
+      <div class="card-value">${isManual ? "manual" : fmtValue(r)}</div>
+      ${!isManual ? `<div class="card-unit">${r.unit||""}</div>` : ""}
+      ${contextHtml}
+      ${tierHtml}
+      <div class="card-date">${fmtDate(r.data_date)}</div>
+      ${noteHtml}
+      ${infoHtml}`;
+    return card;
+  }
+
+  // Append a grid of cards (items array) to a parent element
+  function appendCardGrid(parent, items) {
+    const grid = document.createElement("div");
+    grid.className = "cards";
+    parent.appendChild(grid);
+    for(const r of items) grid.appendChild(buildCard(r));
+    return grid;
+  }
 
   for(const sKey of allKeys) {
     const items = bySector[sKey];
@@ -893,65 +1077,63 @@ function render(data) {
 
     const sec = document.createElement("div");
     sec.className = "sector";
-    sec.innerHTML = `<div class="sector-header">${SECTOR_LABELS[sKey]||sKey}</div><div class="cards"></div>`;
-    const grid = sec.querySelector(".cards");
+    sec.innerHTML = `<div class="sector-header">${SECTOR_LABELS[sKey]||sKey}</div>`;
 
+    // Group items by tier
+    const byTier = {};
+    const noTier = [];
     for(const r of items) {
-      const s = r.status || "manual";
-      const isManual = s === "manual" || r.value === null;
-      const card = document.createElement("div");
-      card.className = "card" + (s==="alert"?" is-alert":s==="warn"?" is-warn":isManual?" is-manual":"");
-
-      let noteHtml = "";
-      if(r.threshold_note && !isManual) {
-        noteHtml = `<div class="card-note">${r.threshold_note}</div>`;
+      const t = lookupTier(r.indicator);
+      if(t && t.tier) {
+        if(!byTier[t.tier]) byTier[t.tier] = [];
+        byTier[t.tier].push(r);
+      } else {
+        noTier.push(r);
       }
-      const contextHtml = (r.context && !isManual)
-        ? `<div class="card-context">${r.context}</div>` : "";
-
-      // Tier badge — only when notes field carries tier framing
-      const tier = inferTier(r.notes);
-      const tierHtml = tier
-        ? `<div class="card-tier">${tier}</div>` : "";
-
-      // Info button + tooltip: scraper notes first, then static knowledge below a divider
-      const scraperText = (r.notes || "").replace(/^Tier\s+\d+\s*[—–-]\s*/i, "").trim();
-      const knowledge = lookupKnowledge(r.indicator);
-      const hasTooltip = scraperText || knowledge;
-
-      let tooltipInner = "";
-      if(scraperText) {
-        tooltipInner += `<div class="tooltip-scraper">${scraperText}</div>`;
-      }
-      if(knowledge) {
-        if(scraperText) tooltipInner += `<hr class="tooltip-divider">`;
-        tooltipInner += `<div class="tooltip-knowledge-title">${knowledge.title}</div>`;
-        tooltipInner += `<div class="tooltip-knowledge-body">${knowledge.body}</div>`;
-      }
-
-      const infoHtml = hasTooltip
-        ? `<div class="card-info-btn" aria-label="Notes">i</div>
-           <div class="card-tooltip">${tooltipInner}</div>` : "";
-
-      card.innerHTML = `
-        <div class="card-dot ${dotClass(s)}"></div>
-        <div class="card-label">${r.indicator}</div>
-        <div class="card-value">${isManual ? "manual" : fmtValue(r)}</div>
-        ${!isManual ? `<div class="card-unit">${r.unit||""}</div>` : ""}
-        ${contextHtml}
-        ${tierHtml}
-        <div class="card-date">${fmtDate(r.data_date)}</div>
-        ${noteHtml}
-        ${infoHtml}`;
-      grid.appendChild(card);
     }
+
+    const tierNums = Object.keys(byTier).map(Number).sort();
+    const hasTiers = tierNums.length > 0;
+
+    for(const tNum of tierNums) {
+      const tierLabel = (TIER_META[sKey] || {})[tNum] || `Tier ${tNum}`;
+      const subhdr = document.createElement("div");
+      subhdr.className = `tier-subheader tier-${tNum}`;
+      subhdr.innerHTML = `<span>Tier ${tNum}</span><span class="tier-desc">${tierLabel}</span>`;
+      sec.appendChild(subhdr);
+      appendCardGrid(sec, byTier[tNum]);
+    }
+
+    if(noTier.length > 0) {
+      if(hasTiers) {
+        const subhdr = document.createElement("div");
+        subhdr.className = "tier-subheader";
+        subhdr.style.cssText = "--tier-color: var(--border2)";
+        subhdr.innerHTML = `<span class="tier-desc">Unclassified</span>`;
+        sec.appendChild(subhdr);
+      }
+      appendCardGrid(sec, noTier);
+    }
+
     sectorsEl.appendChild(sec);
   }
 
+  // After render: correct tooltips that would overflow the viewport
+  requestAnimationFrame(() => {
+    document.querySelectorAll(".card-tooltip").forEach(tip => {
+      tip.style.display = "block";
+      const r = tip.getBoundingClientRect();
+      tip.style.display = "";
+      if(r.top < 4)                         tip.classList.add("flip-down");
+      if(r.right > window.innerWidth - 4)   tip.classList.add("nudge-left");
+      else if(r.left < 4)                   tip.classList.add("nudge-right");
+    });
+  });
+
   document.getElementById("footer-sources").textContent =
-    "Sources: IESO · Bank of Canada · StatsCan · Toronto Open Data · Environment Canada · data.ontario.ca · open.canada.ca · NAV Canada · Toronto Police ASR · Stooq · Stockr";
+    "Sources: IESO · Bank of Canada · StatsCan · Toronto Open Data · Environment Canada · data.ontario.ca · open.canada.ca · NAV Canada · Toronto Police ASR · Stooq · Stockr · EIA";
   document.getElementById("footer-run").textContent =
-    `TII v3.1 · scraper run ${rdFull} · auto-refresh every 6 hours`;
+    `TII v3.2 · scraper run ${rdFull} · auto-refresh every 6 hours`;
 }
 
 function showError(msg) {
