@@ -1098,7 +1098,7 @@ function render(data) {
     const sec = document.createElement("div");
     sec.className = "sector";
     const sectorLink = sKey === "transport_logistics"
-      ? ` <a href="freight-profile.html" target="_blank" rel="noopener" style="font-size:10px;font-weight:400;letter-spacing:0;text-transform:none;color:var(--blue);margin-left:8px;opacity:.8">What's at stake &rarr;</a>`
+      ? ` <a href="freight-profile.html" target="_blank" rel="noopener" style="font-size:10px;font-weight:400;letter-spacing:0;text-transform:none;color:var(--blue);margin-left:8px;opacity:.8">What\u2019s at stake &rarr;</a>`
       : "";
     sec.innerHTML = `<div class="sector-header">${SECTOR_LABELS[sKey]||sKey}${sectorLink}</div>`;
 
