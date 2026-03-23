@@ -1,1 +1,583 @@
 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GTA Rail Freight Profile — Toronto Infrastructure Intelligence</title>
+<style>
+  :root {
+    --bg:       #f8f8f6;
+    --surface:  #ffffff;
+    --surface2: #f1efea;
+    --border:   rgba(0,0,0,0.10);
+    --border2:  rgba(0,0,0,0.18);
+    --text1:    #1a1a18;
+    --text2:    #5a5a56;
+    --text3:    #9a9a94;
+    --ok:       #3b6d11;
+    --ok-bg:    #eaf3de;
+    --warn:     #854f0b;
+    --warn-bg:  #faeeda;
+    --alert:    #a32d2d;
+    --alert-bg: #fcebeb;
+    --blue:     #185fa5;
+    --tier2:    #4a7fa5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:       #1a1a18;
+      --surface:  #242422;
+      --surface2: #2e2e2c;
+      --border:   rgba(255,255,255,0.10);
+      --border2:  rgba(255,255,255,0.18);
+      --text1:    #f0efe8;
+      --text2:    #a8a8a0;
+      --text3:    #686860;
+      --ok:       #97c459;
+      --ok-bg:    #1e2e10;
+      --warn:     #ef9f27;
+      --warn-bg:  #2a1e08;
+      --alert:    #f09595;
+      --alert-bg: #2e1010;
+      --blue:     #85b7eb;
+      --tier2:    #7ab3d4;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text1);
+    font-size: 15px; line-height: 1.6;
+  }
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .topbar {
+    background: var(--surface);
+    border-bottom: 0.5px solid var(--border2);
+    padding: 0 1.5rem;
+    display: flex; align-items: center;
+    justify-content: space-between;
+    gap: 1rem; height: 52px;
+    position: sticky; top: 0; z-index: 10;
+  }
+  .topbar-left { display: flex; align-items: baseline; gap: 10px; }
+  .topbar-title { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+  .topbar-sub   { font-size: 12px; color: var(--text3); }
+  .topbar-link  { font-size: 12px; color: var(--blue); }
+
+  .main { max-width: 900px; margin: 0 auto; padding: 2.5rem 1.5rem 5rem; }
+
+  /* Page header */
+  .page-eyebrow {
+    font-size: 11px; font-weight: 600; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--tier2);
+    margin-bottom: .5rem;
+  }
+  .page-title {
+    font-size: 26px; font-weight: 700; letter-spacing: -.02em;
+    line-height: 1.2; margin-bottom: .75rem;
+  }
+  .page-deck {
+    font-size: 15px; color: var(--text2);
+    max-width: 680px; margin-bottom: 2rem; line-height: 1.65;
+  }
+  .page-divider {
+    border: none; border-top: 0.5px solid var(--border2);
+    margin-bottom: 2.5rem;
+  }
+
+  /* Stat bar */
+  .stat-row {
+    display: flex; gap: 2rem; flex-wrap: wrap;
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: 10px;
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 2.5rem;
+  }
+  .stat { display: flex; flex-direction: column; gap: 3px; }
+  .stat-value {
+    font-size: 24px; font-weight: 700;
+    letter-spacing: -.02em; color: var(--text1);
+  }
+  .stat-label {
+    font-size: 11px; color: var(--text3);
+    text-transform: uppercase; letter-spacing: .05em;
+  }
+
+  /* Section headers */
+  .section-title {
+    font-size: 11px; font-weight: 700; letter-spacing: .07em;
+    text-transform: uppercase; color: var(--text3);
+    margin-bottom: 1rem; padding-bottom: .5rem;
+    border-bottom: 0.5px solid var(--border);
+  }
+
+  /* Commodity bars */
+  .commodity-grid { margin-bottom: 2.5rem; }
+  .commodity-row {
+    display: grid;
+    grid-template-columns: 180px 1fr 100px;
+    align-items: center; gap: 12px;
+    padding: 6px 0;
+    border-bottom: 0.5px solid var(--border);
+  }
+  .commodity-row:last-child { border-bottom: none; }
+  .commodity-name {
+    font-size: 13px; font-weight: 500; color: var(--text1);
+  }
+  .commodity-bar-wrap {
+    height: 10px; background: var(--surface2);
+    border-radius: 99px; overflow: hidden;
+  }
+  .commodity-bar {
+    height: 100%; border-radius: 99px;
+    background: var(--tier2); opacity: .7;
+  }
+  .commodity-right { text-align: right; }
+  .commodity-meta  { font-size: 11px; color: var(--text3); }
+  .commodity-note  {
+    grid-column: 2 / 4;
+    font-size: 12px; color: var(--text2);
+    padding: 0 0 6px;
+    margin-top: -4px;
+  }
+
+  /* Cascade risk table */
+  .cascade-wrap { margin-bottom: 2.5rem; }
+  .cascade-table {
+    width: 100%; border-collapse: collapse; font-size: 13px;
+  }
+  .cascade-table th {
+    text-align: left; font-size: 10px; font-weight: 600;
+    letter-spacing: .05em; text-transform: uppercase;
+    color: var(--text3); padding: 0 12px 10px 0;
+    border-bottom: 0.5px solid var(--border2);
+  }
+  .cascade-table td {
+    padding: 10px 12px 10px 0;
+    border-bottom: 0.5px solid var(--border);
+    color: var(--text2); vertical-align: top;
+  }
+  .cascade-table tr:last-child td { border-bottom: none; }
+  .cascade-table td.col-commodity {
+    font-weight: 600; color: var(--text1); width: 180px;
+  }
+  .cascade-table td.col-time { width: 130px; white-space: nowrap; }
+  .sev-dot {
+    display: inline-block; width: 8px; height: 8px;
+    border-radius: 50%; margin-right: 6px; vertical-align: middle;
+  }
+  .sev-critical { background: var(--alert); }
+  .sev-warn     { background: var(--warn); }
+  .sev-ok       { background: var(--ok); }
+
+  /* Cross-sector callout */
+  .callout {
+    border-radius: 10px; padding: 1.25rem 1.5rem;
+    margin-bottom: 2.5rem; line-height: 1.65;
+  }
+  .callout-warn {
+    background: var(--warn-bg);
+    border: 0.5px solid var(--warn);
+  }
+  .callout-title {
+    font-size: 13px; font-weight: 700;
+    color: var(--warn); margin-bottom: .5rem;
+  }
+  .callout-body { font-size: 13px; color: var(--text1); }
+
+  /* Terminal map section */
+  .terminal-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+    margin-bottom: 2.5rem;
+  }
+  @media (max-width: 600px) {
+    .terminal-grid { grid-template-columns: 1fr; }
+    .commodity-row { grid-template-columns: 150px 1fr; }
+    .commodity-right { display: none; }
+  }
+  .terminal-card {
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+  }
+  .terminal-name {
+    font-size: 13px; font-weight: 600; color: var(--text1);
+    margin-bottom: .3rem;
+  }
+  .terminal-operator {
+    font-size: 11px; font-weight: 600; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--tier2);
+    margin-bottom: .5rem;
+  }
+  .terminal-body { font-size: 12px; color: var(--text2); line-height: 1.55; }
+
+  /* Labour history */
+  .history-row {
+    display: flex; gap: 12px;
+    padding: 10px 0;
+    border-bottom: 0.5px solid var(--border);
+    font-size: 13px;
+  }
+  .history-row:last-child { border-bottom: none; }
+  .history-date { color: var(--text3); width: 100px; flex-shrink: 0; }
+  .history-event { color: var(--text1); }
+  .history-outcome { color: var(--text2); font-size: 12px; margin-top: 2px; }
+
+  .footnote {
+    font-size: 11px; color: var(--text3);
+    border-top: 0.5px solid var(--border);
+    padding-top: 1.5rem; margin-top: 1rem;
+    line-height: 1.6;
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-left">
+    <span class="topbar-title">Toronto Infrastructure Intelligence</span>
+    <span class="topbar-sub">Transport & Logistics</span>
+  </div>
+  <a class="topbar-link" href="index.html">&larr; Live dashboard</a>
+</div>
+
+<div class="main">
+
+  <div class="page-eyebrow">Reference — Transport & Logistics</div>
+  <h1 class="page-title">GTA Rail Freight Profile</h1>
+  <p class="page-deck">
+    The Greater Toronto Area is served by two Class I freight railways — CN and CPKC —
+    whose combined network moves the goods that keep the region's economy, food supply,
+    automotive sector, and critical infrastructure running. This page documents what moves
+    through the GTA by rail, how quickly a disruption cascades into visible impacts, and
+    why freight rail labour risk is a direct concern for Toronto resilience.
+  </p>
+  <hr class="page-divider">
+
+  <!-- Scale stats -->
+  <div class="stat-row">
+    <div class="stat">
+      <span class="stat-value">1.2M</span>
+      <span class="stat-label">TEUs per year</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">$8B</span>
+      <span class="stat-label">Annual economic activity</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">20,000</span>
+      <span class="stat-label">Direct & indirect jobs</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">2</span>
+      <span class="stat-label">Major inland terminals</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">60%</span>
+      <span class="stat-label">Ontario warehousing within 30km</span>
+    </div>
+  </div>
+
+  <!-- Terminals -->
+  <div class="section-title">Major GTA rail terminals</div>
+  <div class="terminal-grid">
+    <div class="terminal-card">
+      <div class="terminal-operator">CN Rail</div>
+      <div class="terminal-name">Brampton Intermodal Terminal (BIT)</div>
+      <div class="terminal-body">
+        76 Intermodal Drive, Brampton. Canada's largest inland rail facility at 680 acres.
+        250,000 m&sup2; of paved yard, 10 loading tracks. Handles containerized freight,
+        automotive parts, and bulk commodities with 24/7 operations. Connected to CN's
+        MacMillan Yard (Toronto) via the Halton Subdivision. Processes ~8-9 trains per day.
+        Canadian Tire's national distribution centre is an adjacent anchor client.
+      </div>
+    </div>
+    <div class="terminal-card">
+      <div class="terminal-operator">CPKC</div>
+      <div class="terminal-name">Vaughan Intermodal Terminal</div>
+      <div class="terminal-body">
+        Located 10 km east of BIT, connecting CPKC's east-west and north-south corridors.
+        Serves the Milton GO corridor (GO Transit shares CPKC track on the Milton line —
+        30,000 commuters affected directly when CPKC stopped in August 2024).
+        Agincourt classification yard (Scarborough) handles bulk and mixed freight
+        sorting for eastern Canada distribution.
+      </div>
+    </div>
+    <div class="terminal-card">
+      <div class="terminal-operator">CN Rail — Critical Infrastructure</div>
+      <div class="terminal-name">Malport Yard & Jet Fuel Facility</div>
+      <div class="terminal-body">
+        Steeles Ave & Airport Rd, Mississauga. Smaller switching yard connected to BIT
+        and MacMillan Yard. Adjacent to the <strong>Jet Fuel Rail Offloading, Storage
+        and Distribution Facility</strong> — the primary fuel supply point for
+        Pearson International Airport. Built at $59-65M, opened July 2009.
+        Also handles dangerous goods including chlorine for Toronto Water treatment plants.
+      </div>
+    </div>
+    <div class="terminal-card">
+      <div class="terminal-operator">CN Rail</div>
+      <div class="terminal-name">MacMillan Yard (Toronto)</div>
+      <div class="terminal-body">
+        Caledonia Rd & Keele St, Toronto. CN's primary Toronto classification yard,
+        connecting the Oakville Subdivision (lakeshore corridor to Windsor) and
+        Kingston Subdivision (corridor to Montreal). GO Transit Barrie, Kitchener,
+        Stouffville, and Richmond Hill lines run on CN track through this corridor —
+        meaning CN freight operations directly influence GO Transit schedules daily.
+      </div>
+    </div>
+  </div>
+
+  <!-- Commodity breakdown -->
+  <div class="section-title">Commodity mix — GTA rail freight</div>
+  <div class="commodity-grid">
+
+    <div class="commodity-row">
+      <div class="commodity-name">Intermodal containers</div>
+      <div class="commodity-bar-wrap"><div class="commodity-bar" style="width:100%"></div></div>
+      <div class="commodity-right"><div class="commodity-meta">22% of CN revenue</div></div>
+    </div>
+    <div class="commodity-row" style="border-bottom:0.5px solid var(--border)">
+      <div></div>
+      <div class="commodity-note">
+        Consumer goods, Asian imports transloaded from Vancouver and Prince Rupert,
+        retail merchandise for GTA distribution. CN's largest and fastest-growing segment.
+        Over 60% of Ontario's warehousing and distribution centres are within 30km of
+        Brampton BIT.
+      </div>
+    </div>
+
+    <div class="commodity-row">
+      <div class="commodity-name">Petroleum & chemicals</div>
+      <div class="commodity-bar-wrap"><div class="commodity-bar" style="width:90%"></div></div>
+      <div class="commodity-right"><div class="commodity-meta">~20% of revenue</div></div>
+    </div>
+    <div class="commodity-row" style="border-bottom:0.5px solid var(--border)">
+      <div></div>
+      <div class="commodity-note">
+        Jet fuel to Pearson International via CN Malport facility, chlorine for Toronto
+        Water treatment plants, LPG for residential areas without natural gas, industrial
+        chemicals for manufacturing. The most critical segment for Toronto resilience —
+        see cross-sector cascade below.
+      </div>
+    </div>
+
+    <div class="commodity-row">
+      <div class="commodity-name">Automotive parts</div>
+      <div class="commodity-bar-wrap"><div class="commodity-bar" style="width:75%"></div></div>
+      <div class="commodity-right"><div class="commodity-meta">just-in-time</div></div>
+    </div>
+    <div class="commodity-row" style="border-bottom:0.5px solid var(--border)">
+      <div></div>
+      <div class="commodity-note">
+        Parts for the Windsor-Toronto-Oshawa automotive corridor: Ford Oakville Assembly,
+        Stellantis Windsor, GM Oshawa. Plants carry 4-8 hours of parts inventory.
+        A rail stoppage shuts assembly lines within one business day.
+        Ontario automotive assembly generates ~$22B in GDP annually.
+      </div>
+    </div>
+
+    <div class="commodity-row">
+      <div class="commodity-name">Food & perishables</div>
+      <div class="commodity-bar-wrap"><div class="commodity-bar" style="width:60%"></div></div>
+      <div class="commodity-right"><div class="commodity-meta">daily volumes</div></div>
+    </div>
+    <div class="commodity-row" style="border-bottom:0.5px solid var(--border)">
+      <div></div>
+      <div class="commodity-note">
+        California and Pacific Northwest produce, frozen goods, dairy distribution
+        for ~6 million GTA residents. Intermodal refrigerated containers (reefers)
+        move on the same trains as general merchandise.
+      </div>
+    </div>
+
+    <div class="commodity-row">
+      <div class="commodity-name">Metals & minerals</div>
+      <div class="commodity-bar-wrap"><div class="commodity-bar" style="width:40%"></div></div>
+      <div class="commodity-right"><div class="commodity-meta">industrial</div></div>
+    </div>
+    <div class="commodity-row" style="border-bottom:0.5px solid var(--border)">
+      <div></div>
+      <div class="commodity-note">
+        Steel coil from Hamilton, aluminum, construction aggregates for GTA building sector.
+        Longer supply chains mean impact from a rail stoppage takes weeks to show up
+        on construction sites rather than days.
+      </div>
+    </div>
+
+    <div class="commodity-row">
+      <div class="commodity-name">Dangerous goods</div>
+      <div class="commodity-bar-wrap"><div class="commodity-bar" style="width:30%"></div></div>
+      <div class="commodity-right"><div class="commodity-meta">527K carloads/yr (CA)</div></div>
+    </div>
+    <div class="commodity-row" style="border-bottom:0">
+      <div></div>
+      <div class="commodity-note">
+        Chlorine, propane, industrial acids, LPG, anhydrous ammonia.
+        Regulated under Transport Canada's Transportation of Dangerous Goods Act.
+        CN and CPKC conduct regular emergency response exercises at GTA yards.
+        In 2016, CN and ERAC ran a full-scale exercise at Malport specifically around
+        petroleum product handling.
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Cross-sector cascade callout -->
+  <div class="callout callout-warn">
+    <div class="callout-title">&#9888; Cross-sector cascade: CN Malport &rarr; Pearson Airport</div>
+    <div class="callout-body">
+      CN's Malport Yard in Mississauga houses the <strong>Jet Fuel Rail Offloading,
+      Storage and Distribution Facility</strong>, the primary supply point for jet fuel
+      at Pearson International Airport. A CN labour stoppage is not solely a freight
+      and commuter event — it is a direct threat to Pearson's fuel supply within 3-5 days
+      as tank farm reserves deplete. This creates a live dependency between the
+      <strong>CN Freight Labour Risk</strong> indicator and the
+      <strong>Pearson Airport Operations</strong> indicator in TII. No other public
+      Toronto infrastructure dashboard documents this dependency.
+      <br><br>
+      Similarly, chlorine and other water treatment chemicals arrive at Toronto Water's
+      treatment plants by rail. A prolonged stoppage (beyond 7-14 days) would begin to
+      affect water treatment operations as chemical reserves deplete — creating a second
+      cross-sector cascade from Transport &amp; Logistics into Water.
+    </div>
+  </div>
+
+  <!-- Cascade risk table -->
+  <div class="section-title">Cascade risk — time to visible impact if rail stops</div>
+  <div class="cascade-wrap">
+    <table class="cascade-table">
+      <thead>
+        <tr>
+          <th>Commodity / system</th>
+          <th>Time to impact</th>
+          <th>Consequence</th>
+          <th>Sectors affected</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="col-commodity">Automotive parts</td>
+          <td class="col-time">
+            <span class="sev-dot sev-critical"></span>4-8 hours
+          </td>
+          <td>Assembly line shutdowns: Ford Oakville, Stellantis Windsor, GM Oshawa</td>
+          <td>Financial (unemployment)</td>
+        </tr>
+        <tr>
+          <td class="col-commodity">Jet fuel (Pearson)</td>
+          <td class="col-time">
+            <span class="sev-dot sev-critical"></span>3-5 days
+          </td>
+          <td>Pearson flight cancellations begin as CN Malport tank farm reserves deplete</td>
+          <td>Transport & Logistics</td>
+        </tr>
+        <tr>
+          <td class="col-commodity">Food & perishables</td>
+          <td class="col-time">
+            <span class="sev-dot sev-critical"></span>3-5 days
+          </td>
+          <td>Fresh produce gaps in GTA retail; price spikes for imported items</td>
+          <td>Food & Prices (CPI)</td>
+        </tr>
+        <tr>
+          <td class="col-commodity">Water treatment chem.</td>
+          <td class="col-time">
+            <span class="sev-dot sev-warn"></span>7-14 days
+          </td>
+          <td>Toronto Water chlorine reserves begin depleting; truck delivery is limited alternative</td>
+          <td>Water</td>
+        </tr>
+        <tr>
+          <td class="col-commodity">Propane & LPG</td>
+          <td class="col-time">
+            <span class="sev-dot sev-warn"></span>1-2 weeks
+          </td>
+          <td>Residential heating shortfalls in areas without natural gas; price spikes</td>
+          <td>Energy (fuel price)</td>
+        </tr>
+        <tr>
+          <td class="col-commodity">Consumer goods</td>
+          <td class="col-time">
+            <span class="sev-dot sev-warn"></span>2-3 weeks
+          </td>
+          <td>Retail stockouts begin for non-perishables; grocery shelf gaps widen</td>
+          <td>Food & Prices (CPI)</td>
+        </tr>
+        <tr>
+          <td class="col-commodity">Steel & construction</td>
+          <td class="col-time">
+            <span class="sev-dot sev-ok"></span>2-4 weeks
+          </td>
+          <td>Construction project delays; longer-term supply chain disruption</td>
+          <td>Financial (TRREB)</td>
+        </tr>
+      </tbody>
+    </table>
+    <div style="font-size:11px;color:var(--text3);margin-top:8px">
+      Timelines are estimates based on reported inventory levels and supply chain structure.
+      Actual impact depends on stoppage duration, season, and availability of alternative transport.
+    </div>
+  </div>
+
+  <!-- Labour history -->
+  <div class="section-title">CN & CPKC labour dispute history — key dates</div>
+  <div style="margin-bottom:2.5rem">
+    <div class="history-row">
+      <div class="history-date">Aug 2024</div>
+      <div>
+        <div class="history-event">First simultaneous CN and CPKC lockout — 9,300 workers affected</div>
+        <div class="history-outcome">Federal government intervened with binding arbitration under Canada Labour Code s.107 within 17 hours. Full network recovery took several weeks. Under Canadian law, rail is not classified as an essential service.</div>
+      </div>
+    </div>
+    <div class="history-row">
+      <div class="history-date">2022</div>
+      <div>
+        <div class="history-event">CN requests one-year contract extension; CPKC merger with KCS</div>
+        <div class="history-outcome">Extension set up the 2024 simultaneous expiry. CPKC (Canadian Pacific + Kansas City Southern) became the first single-line railway connecting Canada, the US, and Mexico.</div>
+      </div>
+    </div>
+    <div class="history-row">
+      <div class="history-date">2019</div>
+      <div>
+        <div class="history-event">CN national strike — engineers and conductors walk out</div>
+        <div class="history-outcome">8-day stoppage. Back-to-work legislation introduced but not needed — settlement reached. Grain and propane supply chains most affected.</div>
+      </div>
+    </div>
+    <div class="history-row">
+      <div class="history-date">Pattern</div>
+      <div>
+        <div class="history-event">Federal government has intervened in every significant CN or CP work stoppage since 2007</div>
+        <div class="history-outcome">However, the 2024 stoppage demonstrated that even a 17-hour shutdown creates weeks of supply chain recovery. The risk is not a prolonged stoppage — it is the cascade from any stoppage of any duration.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sources -->
+  <div class="footnote">
+    <strong>Sources:</strong>
+    CN Rail 2024 Annual Report &middot;
+    CPKC 2024 Annual Report &middot;
+    Railway Association of Canada Rail Trends 2024 &middot;
+    Transport Canada Annual Report 2024 &middot;
+    Statistics Canada Rail Transportation Survey (Table 23-10-0054-01) &middot;
+    Wikipedia — CN Rail facilities in Peel Region &middot;
+    CBC News — CN/CPKC labour coverage August 2024 &middot;
+    unisco.com — Brampton Intermodal Terminal profile.
+    <br><br>
+    Bar widths represent relative economic significance to GTA supply chain resilience,
+    not precise revenue percentages. Revenue shares are CN national figures; Toronto-specific
+    commodity volumes are not published at the municipal level.
+    <br><br>
+    <a href="index.html">&larr; Return to TII live dashboard</a>
+    &nbsp;&middot;&nbsp;
+    <a href="https://www.criticalto.ca" target="_blank" rel="noopener">criticalto.ca</a>
+  </div>
+
+</div>
+</body>
+</html>
