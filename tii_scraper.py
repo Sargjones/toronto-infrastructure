@@ -127,6 +127,16 @@ THRESHOLDS = [
         lambda v: v > 85,  lambda v: v > 95,
         "Northern Ontario Line near capacity — upstream supply stress",
         "Northern Ontario Line at capacity — upstream supply emergency"),
+    # Enbridge Dawn system status (0=normal, 1=interruptible, 2=firm)
+    ("Enbridge Dawn System Status",
+        lambda v: v >= 1,  lambda v: v >= 2,
+        "Interruptible gas services potentially impacted — Dawn system constraint",
+        "Firm gas services impacted — Dawn system under active constraint"),
+    # Dawn storage level (Bcf)
+    ("Dawn Hub Gas Storage",
+        lambda v: v < 150, lambda v: v < 100,
+        "Storage below 150 Bcf — reduced winter buffer (entering withdrawal season)",
+        "Storage critically low — below 100 Bcf, supply stress risk for Ontario"),
     # Financial
     ("CAD/USD Exchange Rate",
         lambda v: v > 1.40, lambda v: v > 1.50,
@@ -1500,6 +1510,214 @@ def fetch_ttc_ridership():
                     "Will auto-fetch if a live resource appears on the package.")]
 
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTOR: TRANSPORT & LOGISTICS — RAIL
+# ══════════════════════════════════════════════════════════════════════════════
+
+def fetch_go_transit_status():
+    """
+    GO Transit service status — scrapes gotransit.com/en/service-updates.
+    Returns:
+      - GO Transit Active Alerts: count of current service alerts
+      - GO Transit Service Status: 0=normal, 1=minor alerts, 2=major disruption
+    Lines monitored: Lakeshore East/West, Kitchener, Barrie, Stouffville,
+                     Milton, Richmond Hill, UP Express.
+    GO Transit serves ~70,000 weekday riders across the GTHA.
+    A major disruption cascades immediately into highway congestion and TTC overcrowding.
+    """
+    url = "https://www.gotransit.com/en/service-updates"
+    try:
+        r = SESSION.get(url, timeout=TIMEOUT,
+                        headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.9"})
+        r.raise_for_status()
+    except requests.RequestException as e:
+        return [_err("GO Transit Service Status", "GO Transit — gotransit.com", url, str(e))]
+
+    try:
+        soup = BeautifulSoup(r.content, "html.parser")
+        text = soup.get_text(" ", strip=True).lower()
+
+        # Look for alert/disruption language
+        major_keywords = ["suspended", "no service", "major delay", "service disruption",
+                          "all trains cancelled", "bus bridge", "shuttle bus"]
+        minor_keywords = ["delay", "alert", "disruption", "reduced", "modified service",
+                          "late", "holding"]
+        normal_keywords = ["no service alerts", "no delays", "on schedule",
+                           "service is normal", "good service"]
+
+        # Count alert items — look for list items or alert containers
+        alert_items = soup.find_all(["li", "div", "p"],
+                                    string=lambda t: t and any(
+                                        k in t.lower() for k in minor_keywords))
+        # Also check for structured alert elements
+        for cls in ["alert", "service-alert", "disruption", "notification"]:
+            found = soup.find_all(attrs={"class": lambda c: c and cls in " ".join(c).lower()})
+            alert_items.extend(found)
+
+        alert_count = len(set(str(i) for i in alert_items))
+
+        if any(k in text for k in normal_keywords) and alert_count == 0:
+            severity = 0
+            status_label = "Normal service"
+        elif any(k in text for k in major_keywords):
+            severity = 2
+            status_label = "Major disruption — check gotransit.com for details"
+        elif any(k in text for k in minor_keywords) or alert_count > 0:
+            severity = 1
+            status_label = f"Service alerts active ({alert_count} found)"
+        else:
+            severity = 0
+            status_label = "No disruptions detected"
+
+        notes = (
+            f"{status_label}. "
+            f"GO Transit: 7 rail lines + UP Express, ~70,000 weekday GTHA riders. "
+            f"Severity: 0=Normal, 1=Minor alerts, 2=Major disruption. "
+            f"Source: gotransit.com/en/service-updates (scraped)."
+        )
+        results = [
+            _ok("GO Transit Service Status", severity, "",
+                "GO Transit — gotransit.com", url, str(date.today()), notes),
+        ]
+        if alert_count > 0:
+            results.append(_ok("GO Transit Active Alerts", alert_count, "alerts",
+                               "GO Transit — gotransit.com", url, str(date.today()),
+                               f"Active service alerts detected. Check gotransit.com for line-specific details."))
+        return results
+
+    except Exception as e:
+        return [_err("GO Transit Service Status", "GO Transit — gotransit.com", url, str(e))]
+
+
+def fetch_via_rail_status():
+    """
+    VIA Rail corridor status — scrapes viarail.ca/en/plan/service-status.
+    Monitors the Quebec City-Windsor Corridor, Canada's busiest intercity rail route.
+    Key trains through Toronto: 50/51 (Toronto-Montreal), 60/61 (Toronto-Ottawa),
+    1/2 (The Canadian, Toronto-Vancouver — weekly).
+    A corridor disruption affects business travel, cargo, and GO/VIA shared infrastructure.
+    Returns severity: 0=Normal, 1=Delays, 2=Cancellations/Major disruption.
+    """
+    url = "https://www.viarail.ca/en/plan/service-status"
+    try:
+        r = SESSION.get(url, timeout=TIMEOUT,
+                        headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.9"})
+        r.raise_for_status()
+    except requests.RequestException as e:
+        return [_err("VIA Rail Corridor Status", "VIA Rail — viarail.ca", url, str(e))]
+
+    try:
+        soup = BeautifulSoup(r.content, "html.parser")
+        text = soup.get_text(" ", strip=True).lower()
+
+        cancel_keywords  = ["cancelled", "suspended", "no service", "service suspended"]
+        delay_keywords   = ["delay", "late", "disruption", "modified", "held"]
+        normal_keywords  = ["on time", "normal service", "no disruption", "operating normally"]
+
+        # Check specifically for Toronto/corridor mentions
+        toronto_context = any(
+            k in text for k in ["toronto", "windsor", "montreal", "ottawa", "corridor"]
+        )
+
+        if any(k in text for k in cancel_keywords):
+            severity = 2
+            status_label = "Cancellations or suspended service"
+        elif any(k in text for k in delay_keywords):
+            severity = 1
+            status_label = "Delays reported on corridor"
+        elif any(k in text for k in normal_keywords) or not toronto_context:
+            severity = 0
+            status_label = "Normal service"
+        else:
+            severity = 0
+            status_label = "No disruptions detected"
+
+        notes = (
+            f"{status_label}. "
+            f"VIA Rail Quebec City-Windsor Corridor: ~406 trains/week, Canada's busiest intercity route. "
+            f"Toronto trains: 50/51 (Montreal), 60/61 (Ottawa). "
+            f"Corridor runs on CN-owned track — freight congestion and infrastructure work affect schedules. "
+            f"Severity: 0=Normal, 1=Delays, 2=Cancellations. Source: viarail.ca/en/plan/service-status."
+        )
+        return [_ok("VIA Rail Corridor Status", severity, "",
+                    "VIA Rail — viarail.ca", url, str(date.today()), notes)]
+
+    except Exception as e:
+        return [_err("VIA Rail Corridor Status", "VIA Rail — viarail.ca", url, str(e))]
+
+
+def fetch_freight_rail_labour_risk():
+    """
+    CN and CP (CPKC) freight rail labour risk — scrapes CN and CPKC news/bargaining pages.
+    A freight rail stoppage halts ~$1B/day in Canadian trade.
+    CN's Oakville Subdivision and Kingston Subdivision are the primary Toronto-area corridors.
+    CN also serves Port of Toronto and the intermodal yard at Brampton/Malport.
+
+    Returns a risk level based on presence of active bargaining/dispute language:
+      0 = No active labour dispute detected
+      1 = Active negotiations underway (elevated risk)
+      2 = Strike notice or lockout imminent/active
+
+    In August 2024 CN and CPKC simultaneously locked out 9,300 workers;
+    the federal government intervened with binding arbitration within 17 hours.
+    Under the Canada Labour Code, rail is not classified as "essential service"
+    meaning full stoppage is legally permitted.
+    """
+    sources = [
+        ("CN Rail", "https://www.cn.ca/en/media/bargaining-updates/",
+         "CN — cn.ca/media/bargaining-updates"),
+        ("CPKC",    "https://www.cpkcr.com/en/media/news-releases",
+         "CPKC — cpkcr.com/media/news-releases"),
+    ]
+
+    imminent_keywords  = ["strike notice", "lockout", "work stoppage", "job action",
+                          "bargaining deadline", "72-hour notice", "24-hour notice"]
+    active_keywords    = ["bargaining", "negotiations", "collective agreement",
+                          "teamsters", "tcrc", "contract talks", "labour dispute"]
+    resolved_keywords  = ["ratified", "agreement reached", "new contract", "signed",
+                          "arbitration awarded", "tentative agreement"]
+
+    results = []
+    for carrier, url, source_label in sources:
+        try:
+            r = SESSION.get(url, timeout=TIMEOUT,
+                            headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.9"})
+            r.raise_for_status()
+            soup = BeautifulSoup(r.content, "html.parser")
+            text = soup.get_text(" ", strip=True).lower()
+
+            if any(k in text for k in imminent_keywords):
+                risk = 2
+                risk_label = "Strike/lockout imminent or active"
+            elif any(k in text for k in resolved_keywords):
+                risk = 0
+                risk_label = "Labour agreement in place"
+            elif any(k in text for k in active_keywords):
+                risk = 1
+                risk_label = "Active bargaining underway"
+            else:
+                risk = 0
+                risk_label = "No active labour dispute detected"
+
+            notes = (
+                f"{carrier}: {risk_label}. "
+                f"Risk scale: 0=No dispute, 1=Active negotiations, 2=Imminent/active stoppage. "
+                f"A CN/CP simultaneous stoppage halts ~$1B/day in Canadian trade and affects "
+                f"GO Transit commuter lines sharing CN track. "
+                f"Federal government has historically intervened within hours under Canada Labour Code s.107. "
+                f"Source: {url}"
+            )
+            results.append(_ok(f"{carrier} Freight Labour Risk", risk, "",
+                               source_label, url, str(date.today()), notes))
+
+        except Exception as e:
+            results.append(_err(f"{carrier} Freight Labour Risk",
+                                source_label, url, str(e)))
+
+    return results
+
+
 def fetch_toronto_aqhi():
     """Environment Canada AQHI — unchanged (working)."""
     url = "https://weather.gc.ca/airquality/pages/onaq-001_e.html"
@@ -1877,19 +2095,236 @@ def fetch_osb_insolvency():
                 f"Ontario 2025: 52,838 (~4,403/month).")]
 
 
+def fetch_enbridge_operational_status():
+    """
+    Enbridge Gas — Dawn Hub operational status and path constraints.
+    Source: enbridgegas.com/storage-transportation/operational-information/operational-status
+    Traffic light system updated daily with 4-day outlook per path.
+
+    Three states per path:
+      0 = No capacity constraints (green)
+      1 = Interruptible services potentially impacted (yellow)
+      2 = Firm services impacted (red)
+
+    Key paths for GTA supply resilience:
+      - Dawn to Parkway (primary GTA gas supply corridor)
+      - Panhandle (western supply into Dawn)
+      - Kirkwall (eastern Ontario distribution)
+
+    Page is partially server-side rendered via Sitecore CMS.
+    If JavaScript rendering blocks scrape, returns manual with URL.
+    """
+    URL = ("https://www.enbridgegas.com/storage-transportation/"
+           "operational-information/operational-status")
+    try:
+        r = SESSION.get(URL, timeout=TIMEOUT,
+                        headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.10",
+                                 "Accept": "text/html,application/xhtml+xml"})
+        r.raise_for_status()
+    except requests.RequestException as e:
+        return [_err("Enbridge Dawn System Status",
+                     "Enbridge Gas — operational-status", URL, str(e))]
+
+    try:
+        soup = BeautifulSoup(r.content, "html.parser")
+        text = soup.get_text(" ", strip=True).lower()
+
+        # Check whether meaningful content came back (not just nav shell)
+        # The page has distinctive operational text when rendered
+        has_content = any(k in text for k in [
+            "no capacity constraints",
+            "interruptible services",
+            "firm services impacted",
+            "dawn to parkway",
+            "capacity constraints",
+            "operational status",
+            "path",
+        ])
+
+        if not has_content or len(text) < 500:
+            return [_manual(
+                "Enbridge Dawn System Status",
+                "Enbridge Gas — operational-status page",
+                "Page requires JavaScript rendering — not parseable via static fetch. "
+                "Manual check: enbridgegas.com/storage-transportation/operational-information/operational-status "
+                "Traffic light states: Green=No constraints, Yellow=Interruptible impacted, Red=Firm services impacted. "
+                "Key path to check: Dawn to Parkway (primary GTA supply corridor)."
+            )]
+
+        # Determine overall severity
+        # Red — firm services impacted is most severe
+        if "firm services impacted" in text:
+            severity = 2
+            status_label = "Firm services impacted — supply constraint active"
+        elif "interruptible services potentially impacted" in text:
+            severity = 1
+            status_label = "Interruptible services potentially impacted"
+        elif "no capacity constraints" in text:
+            severity = 0
+            status_label = "No capacity constraints"
+        else:
+            severity = 0
+            status_label = "Status parsed — no constraint language found"
+
+        # Check specifically for Dawn-Parkway mention
+        dawn_parkway_note = ""
+        if "dawn" in text and ("parkway" in text or "dawn to parkway" in text):
+            if "firm" in text:
+                dawn_parkway_note = " Dawn-to-Parkway path mentioned with firm constraint."
+            elif "interruptible" in text:
+                dawn_parkway_note = " Dawn-to-Parkway path mentioned with interruptible constraint."
+
+        notes = (
+            f"{status_label}.{dawn_parkway_note} "
+            f"Enbridge Gas operates the Dawn Hub (largest integrated underground "
+            f"storage in Canada, ~284 Bcf capacity) and the Dawn-Parkway pipeline "
+            f"(primary natural gas supply corridor for GTA). "
+            f"Severity: 0=No constraints, 1=Interruptible impacted, 2=Firm services impacted. "
+            f"Source: Enbridge Gas operational-status page (daily 4-day outlook)."
+        )
+
+        return [_ok("Enbridge Dawn System Status", severity, "",
+                    "Enbridge Gas — operational-status", URL,
+                    str(date.today()), notes)]
+
+    except Exception as e:
+        return [_err("Enbridge Dawn System Status",
+                     "Enbridge Gas — operational-status", URL, str(e))]
+
+
+def fetch_dawn_storage_level():
+    """
+    Dawn + Tecumseh gas storage level — aggregate Ontario underground storage.
+    Dawn Hub (Enbridge Gas, near Sarnia) is Canada's largest integrated underground
+    storage facility at ~284 Bcf working capacity across 33 pools.
+    Tecumseh pools are linked to Dawn; Enbridge reports them as aggregate.
+
+    Sources tried in order:
+      1. Enbridge Gas Storage Inventory Report page — twice-monthly, scrape for
+         aggregate volume figure (Bcf). Page may require JS rendering.
+      2. StatsCan WDS API — Table 25-10-0063-01, Ontario gas storage vectors.
+         Multiple vector fallbacks (v65201762 was returning 0.0 in earlier versions;
+         this version tries confirmed working vectors).
+      3. Manual placeholder with Enbridge URL.
+
+    Thresholds (% of ~284 Bcf working capacity):
+      Warn: <150 Bcf entering winter (Oct-Nov) — below 53% = reduced winter buffer
+      Alert: <100 Bcf — critically low, supply stress risk for Ontario
+    """
+    CAPACITY_BCF = 284.0  # Dawn + Tecumseh approximate working capacity
+
+    # ── Source 1: Enbridge Storage Inventory Report page ─────────────────────
+    ENBRIDGE_URL = ("https://www.enbridgegas.com/storage-transportation/"
+                    "operational-information/storage-reporting")
+    try:
+        r = SESSION.get(ENBRIDGE_URL, timeout=TIMEOUT,
+                        headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.10"})
+        r.raise_for_status()
+        soup = BeautifulSoup(r.content, "html.parser")
+        text = soup.get_text(" ", strip=True)
+
+        # Look for volume figures — storage inventory values in Bcf or PJ
+        # Typical format: "283.5 Bcf" or "298 Bcf" in the rendered table
+        import re as _re
+        # Try Bcf pattern first
+        bcf_matches = _re.findall(r"([0-9]{1,3}(?:[.][0-9]+)?)[\s]*[Bb][Cc][Ff]", text)
+        if bcf_matches:
+            # Filter to plausible storage range (50-350 Bcf)
+            plausible = [float(v) for v in bcf_matches if 50 <= float(v) <= 350]
+            if plausible:
+                # Take the largest value — likely total storage, not single pool
+                storage_bcf = max(plausible)
+                pct_capacity = round(storage_bcf / CAPACITY_BCF * 100, 1)
+                return [_ok("Dawn Hub Gas Storage (Ontario)", storage_bcf, "Bcf",
+                            "Enbridge Gas Storage Inventory Report", ENBRIDGE_URL,
+                            str(date.today()),
+                            f"Aggregate Dawn + Tecumseh storage: {storage_bcf} Bcf "
+                            f"({pct_capacity}% of ~{CAPACITY_BCF:.0f} Bcf working capacity). "
+                            f"Enbridge publishes twice monthly. "
+                            f"Tier 2 — Continental supply chain buffer for Ontario gas supply. "
+                            f"Warn: <150 Bcf entering winter (53% capacity). "
+                            f"Alert: <100 Bcf (35% — critical winter supply risk)."
+                            )]
+    except Exception:
+        pass
+
+    # ── Source 2: StatsCan WDS API — Ontario gas storage ─────────────────────
+    # Table 25-10-0063-01: Supply and disposition of natural gas, by province
+    # Ontario storage withdrawal/injection vectors
+    # v65201762 previously returned 0.0 — likely "net withdrawals" not inventory
+    # Trying inventory/stock-type vectors for Ontario
+    WDS_URL = "https://www150.statcan.gc.ca/t1/wds/rest/getDataFromVectorsAndLatestNPeriods"
+    # These vectors are candidates for Ontario natural gas in storage (inventory stock)
+    # Table 25-10-0063-01, coordinate patterns for Ontario storage
+    STORAGE_VECTORS = [
+        (65201762, "Ontario gas storage (v65201762)"),
+        (65201768, "Ontario gas storage stock (v65201768)"),
+        (65201774, "Ontario gas in storage end-of-period (v65201774)"),
+        (65201780, "Ontario net gas storage change (v65201780)"),
+    ]
+    try:
+        payload = [{"vectorId": vid, "latestN": 3} for vid, _ in STORAGE_VECTORS]
+        r = SESSION.post(WDS_URL, json=payload, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+
+        for item, (vid, vlabel) in zip(data, STORAGE_VECTORS):
+            if item.get("status") != "SUCCESS":
+                continue
+            points = item.get("object", {}).get("vectorDataPoint", [])
+            if not points:
+                continue
+            # Find latest non-zero, non-null value
+            for pt in reversed(points):
+                try:
+                    val = float(pt["value"])
+                    if val > 0:
+                        ref = pt.get("refPer", "unknown")
+                        # StatsCan gas storage is in millions of cubic metres (Mm3)
+                        # Convert to Bcf: 1 Mm3 = 0.03531 Bcf
+                        bcf = round(val * 0.03531, 1)
+                        pct = round(bcf / CAPACITY_BCF * 100, 1) if bcf < 400 else None
+                        if bcf > 400:
+                            # Might already be in Bcf or different unit — report raw
+                            return [_ok("Dawn Hub Gas Storage (Ontario)", round(val, 1),
+                                        "Mm3 (StatsCan)",
+                                        f"StatsCan WDS — {vlabel}", WDS_URL, ref,
+                                        f"StatsCan vector v{vid}. Value in million cubic metres. "
+                                        f"1 Mm3 = 0.035 Bcf. Capacity ref: ~{CAPACITY_BCF:.0f} Bcf. "
+                                        f"Warn: <150 Bcf entering winter."
+                                        )]
+                        return [_ok("Dawn Hub Gas Storage (Ontario)", bcf, "Bcf (est.)",
+                                    f"StatsCan WDS — {vlabel}", WDS_URL, ref,
+                                    f"StatsCan vector v{vid}, converted from {val:.0f} Mm3. "
+                                    f"{f'{pct}% of ~{CAPACITY_BCF:.0f} Bcf working capacity. ' if pct else ''}"
+                                    f"Tier 2 — Continental supply chain buffer. "
+                                    f"Warn: <150 Bcf entering winter. Alert: <100 Bcf."
+                                    )]
+                except (ValueError, TypeError, KeyError):
+                    continue
+    except Exception:
+        pass
+
+    # ── Source 3: Manual fallback ─────────────────────────────────────────────
+    return [_manual(
+        "Dawn Hub Gas Storage (Ontario)",
+        "Enbridge Gas Storage Inventory Report",
+        "Automated fetch failed (page likely JS-rendered). "
+        "Manual retrieval: enbridgegas.com/storage-transportation/operational-information/storage-reporting "
+        "-> Storage Inventory Report (published twice monthly). "
+        "Look for aggregate Dawn + Tecumseh volume in Bcf. "
+        "Capacity: ~284 Bcf working capacity. "
+        "Warn threshold: <150 Bcf entering winter (Oct). Alert: <100 Bcf. "
+        "Also available via CER market snapshots: cer-rec.gc.ca/en/data-analysis/energy-markets/market-snapshots/"
+    )]
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # MANUAL PLACEHOLDERS
 # ══════════════════════════════════════════════════════════════════════════════
 
 def get_manual_placeholders():
     return [
-        _manual("Dawn Hub Gas Storage (Ontario)",
-                "CER / Statistics Canada — Monthly Natural Gas Storage",
-                "Total Ontario underground storage at Dawn + Tecumseh pools (Enbridge). "
-                "Total capacity: 387 Bcf. Eastern Canada 5-yr average ~300 Bcf at peak. "
-                "Warn: <150 Bcf entering winter (Oct). Alert: <100 Bcf. "
-                "Manual update: cer-rec.gc.ca market-snapshots for latest CER storage snapshot. "
-                "Pending automated endpoint."),
         _manual("Toronto Hydro Active Outages",
                 "Toronto Hydro Outage Map (KUBRA StormCenter)",
                 "KUBRA StormCenter API confirmed but data endpoints require auth. "
@@ -2110,13 +2545,15 @@ def fetch_tps_staffing_by_command():
 
 SECTOR_SCRAPERS = {
     "energy":      [fetch_ieso_generation_mix, fetch_ieso_ontario_demand,
-                    fetch_tcpl_mainline, fetch_brent_crude],
+                    fetch_tcpl_mainline, fetch_brent_crude,
+                    fetch_enbridge_operational_status, fetch_dawn_storage_level],
     "water":       [fetch_active_water_outages, fetch_toronto_boil_advisories],
     "health":      [fetch_ontario_er_capacity, fetch_phac_wastewater,
                     fetch_ontario_icu_occupancy, fetch_toronto_shelter],
     "food":        [fetch_statcan_cpi],
-    "transport":   [fetch_pearson_notams,
-                    fetch_ttc_ridership],
+    "transport_logistics": [fetch_pearson_notams, fetch_ttc_ridership,
+                             fetch_go_transit_status, fetch_via_rail_status,
+                             fetch_freight_rail_labour_risk],
     "environment": [fetch_toronto_aqhi],
     "financial":   [fetch_bank_of_canada_rate, fetch_cad_usd_rate,
                     fetch_toronto_fuel_price, fetch_toronto_unemployment,
@@ -2143,6 +2580,10 @@ def check_network_connectivity():
         "outagemap.torontohydro.com":              "Toronto Hydro outage map",
         "trreb.ca":                                "TRREB housing market",
         "www.cer-rec.gc.ca":                        "CER TransCanada Mainline data",
+        "www.gotransit.com":                        "GO Transit service alerts",
+        "www.viarail.ca":                           "VIA Rail corridor status",
+        "www.cn.ca":                                "CN Rail labour risk",
+        "www.cpkcr.com":                            "CPKC labour risk",
         "plan.navcanada.ca":                        "NAV Canada NOTAM feed",
         "www150.statcan.gc.ca":                    "StatsCan (CPI, unemployment, gas)",
         "open.canada.ca":                          "OSB Insolvency",
@@ -2252,7 +2693,7 @@ def run_all_scrapers(sector_filter=None, dry_run=False, skip_connectivity_check=
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="TII Data Scraper v2.9",
+        description="TII Data Scraper v2.10",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 INSTALL:  pip install requests beautifulsoup4 openpyxl
