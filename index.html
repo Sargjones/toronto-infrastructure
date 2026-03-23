@@ -1089,10 +1089,6 @@ function render(data) {
     p.textContent = `${n} ${label}`;
     bar.appendChild(p);
   }
-  const dateSpan = document.createElement("span");
-  dateSpan.className = "summary-date";
-  dateSpan.textContent = `updated ${rdFull}`;
-  bar.appendChild(dateSpan);
 
   const banners = document.getElementById("alert-banners");
   banners.innerHTML = "";
