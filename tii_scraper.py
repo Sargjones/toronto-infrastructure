@@ -132,9 +132,10 @@ THRESHOLDS = [
         lambda v: v >= 1,  lambda v: v >= 2,
         "Interruptible gas services potentially impacted — Dawn system constraint",
         "Firm gas services impacted — Dawn system under active constraint"),
-    # Dawn storage level (Bcf)
+    # Dawn storage level (Bcf) — only fires on plausible storage values (>10 Bcf)
+    # Guards against StatsCan vectors returning 0.0 (net-change vectors, not stock)
     ("Dawn Hub Gas Storage",
-        lambda v: v < 150, lambda v: v < 100,
+        lambda v: 10 < v < 150, lambda v: 10 < v < 100,
         "Storage below 150 Bcf — reduced winter buffer (entering withdrawal season)",
         "Storage critically low — below 100 Bcf, supply stress risk for Ontario"),
     # Financial
@@ -2278,28 +2279,29 @@ def fetch_dawn_storage_level():
             for pt in reversed(points):
                 try:
                     val = float(pt["value"])
-                    if val > 0:
-                        ref = pt.get("refPer", "unknown")
-                        # StatsCan gas storage is in millions of cubic metres (Mm3)
-                        # Convert to Bcf: 1 Mm3 = 0.03531 Bcf
-                        bcf = round(val * 0.03531, 1)
-                        pct = round(bcf / CAPACITY_BCF * 100, 1) if bcf < 400 else None
-                        if bcf > 400:
-                            # Might already be in Bcf or different unit — report raw
-                            return [_ok("Dawn Hub Gas Storage (Ontario)", round(val, 1),
-                                        "Mm3 (StatsCan)",
-                                        f"StatsCan WDS — {vlabel}", WDS_URL, ref,
-                                        f"StatsCan vector v{vid}. Value in million cubic metres. "
-                                        f"1 Mm3 = 0.035 Bcf. Capacity ref: ~{CAPACITY_BCF:.0f} Bcf. "
-                                        f"Warn: <150 Bcf entering winter."
-                                        )]
-                        return [_ok("Dawn Hub Gas Storage (Ontario)", bcf, "Bcf (est.)",
+                    if val <= 0:   # zero = net-change vector, not stock; skip
+                        continue
+                    ref = pt.get("refPer", "unknown")
+                    # StatsCan gas storage is in millions of cubic metres (Mm3)
+                    # Convert to Bcf: 1 Mm3 = 0.03531 Bcf
+                    bcf = round(val * 0.03531, 1)
+                    pct = round(bcf / CAPACITY_BCF * 100, 1) if bcf < 400 else None
+                    if bcf > 400:
+                        # Might already be in Bcf or different unit — report raw
+                        return [_ok("Dawn Hub Gas Storage (Ontario)", round(val, 1),
+                                    "Mm3 (StatsCan)",
                                     f"StatsCan WDS — {vlabel}", WDS_URL, ref,
-                                    f"StatsCan vector v{vid}, converted from {val:.0f} Mm3. "
-                                    f"{f'{pct}% of ~{CAPACITY_BCF:.0f} Bcf working capacity. ' if pct else ''}"
-                                    f"Tier 2 — Continental supply chain buffer. "
-                                    f"Warn: <150 Bcf entering winter. Alert: <100 Bcf."
+                                    f"StatsCan vector v{vid}. Value in million cubic metres. "
+                                    f"1 Mm3 = 0.035 Bcf. Capacity ref: ~{CAPACITY_BCF:.0f} Bcf. "
+                                    f"Warn: <150 Bcf entering winter."
                                     )]
+                    return [_ok("Dawn Hub Gas Storage (Ontario)", bcf, "Bcf (est.)",
+                                f"StatsCan WDS — {vlabel}", WDS_URL, ref,
+                                f"StatsCan vector v{vid}, converted from {val:.0f} Mm3. "
+                                f"{f'{pct}% of ~{CAPACITY_BCF:.0f} Bcf working capacity. ' if pct else ''}"
+                                f"Tier 2 — Continental supply chain buffer. "
+                                f"Warn: <150 Bcf entering winter. Alert: <100 Bcf."
+                                )]
                 except (ValueError, TypeError, KeyError):
                     continue
     except Exception:
