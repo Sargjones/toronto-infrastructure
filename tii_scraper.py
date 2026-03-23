@@ -2111,10 +2111,9 @@ def fetch_tps_staffing_by_command():
 SECTOR_SCRAPERS = {
     "energy":      [fetch_ieso_generation_mix, fetch_ieso_ontario_demand,
                     fetch_tcpl_mainline, fetch_brent_crude],
-    "water":       [fetch_active_water_outages, fetch_toronto_boil_advisories,
-                    fetch_toronto_shelter],
+    "water":       [fetch_active_water_outages, fetch_toronto_boil_advisories],
     "health":      [fetch_ontario_er_capacity, fetch_phac_wastewater,
-                    fetch_ontario_icu_occupancy],
+                    fetch_ontario_icu_occupancy, fetch_toronto_shelter],
     "food":        [fetch_statcan_cpi],
     "transport":   [fetch_pearson_notams,
                     fetch_ttc_ridership],
