@@ -749,13 +749,13 @@ const TIER_MAP = {
   "active watermain":               { tier: 2, sector: "water" },
   "planned maintenance outage":     { tier: 2, sector: "water" },
   "watermain break rate":           { tier: 2, sector: "water" },
-  "shelter system capacity":        { tier: 3, sector: "water" },
-  "shelter occupancy":              { tier: 3, sector: "water" },
   // HEALTH
   "wastewater virus":               { tier: 1, sector: "health" },
   "o-neg blood":                    { tier: 1, sector: "health" },
   "ontario icu":                    { tier: 2, sector: "health" },
   "er capacity":                    { tier: 2, sector: "health" },
+  "shelter system capacity":        { tier: 3, sector: "health" },
+  "shelter occupancy":              { tier: 3, sector: "health" },
   "air quality":                    { tier: 3, sector: "health" },
   "aqhi":                           { tier: 3, sector: "health" },
   "wwtp eca":                       { tier: 3, sector: "health" },
@@ -796,7 +796,7 @@ const TIER_META = {
   health: {
     1: "Population signal",
     2: "System capacity",
-    3: "Community impact",
+    3: "Community & social determinants",
   },
   transport: {
     1: "External gateway",
@@ -832,8 +832,8 @@ function lookupTier(indicatorName) {
 function inferSector(name) {
   const n = (name||"").toLowerCase();
   if(/nuclear|hydro|gas output|wind|solar|biofuel|ontario demand|peak demand|generation|brent|storage|grid|reserve|tcpl|pipeline|parkway|mainline/.test(n)) return "energy";
-  if(/water|shelter|watermain|wwtp/.test(n)) return "water";
-  if(/icu|er capacity|wastewater|blood/.test(n)) return "health";
+  if(/water|watermain|wwtp/.test(n)) return "water";
+  if(/icu|er capacity|wastewater|blood|shelter/.test(n)) return "health";
   if(/cpi|grocery|food bank|inflation/.test(n)) return "food";
   if(/ttc|ridership|port|dwell|pearson|notam|airport|cyyz/.test(n)) return "transport";
   if(/aqhi|air quality|smog/.test(n)) return "environment";
