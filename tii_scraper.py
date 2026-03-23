@@ -437,79 +437,101 @@ def fetch_brent_crude():
     """
     Brent crude spot price.
 
-    TIER POSITION: Tier 1 — Global commodity layer.
+    TIER POSITION: Tier 1 - Global commodity layer.
     Brent is the first link in the Ontario energy supply chain:
-      Tier 1 → Brent crude (global commodity benchmark, set by ICE/OPEC dynamics)
-      Tier 2 → TCPL pipeline utilization (continental delivery infrastructure)
-      Tier 3 → Toronto pump price / IESO gas peaker dispatch (local real-time delivery)
+      Tier 1 -> Brent crude (global commodity benchmark, set by ICE/OPEC dynamics)
+      Tier 2 -> TCPL pipeline utilization (continental delivery infrastructure)
+      Tier 3 -> Toronto pump price / IESO gas peaker dispatch (local real-time delivery)
 
     Sources tried in order:
-      1. FRED (St. Louis Fed) — DCOILBRENTEU series. Daily ICE Brent spot price in USD/bbl.
-         No API key required. ~1 business day lag. Highly reliable US government data service.
-      2. Stooq.com — cb.f (ICE Brent front-month futures). No API key, non-US jurisdiction.
-      3. Stooq.com — lco.f (alternate ICE Brent ticker).
+      1. datasets/oil-prices (GitHub raw) - EIA Brent daily CSV mirrored on GitHub.
+         raw.githubusercontent.com is always reachable from GitHub Actions.
+         Updated daily from EIA. Format: Date,Price (USD/bbl).
+      2. FRED (St. Louis Fed) - DCOILBRENTEU series. No API key required.
+         May be blocked or rate-limited in some CI environments.
+      3. Stooq.com - cb.f ticker. No API key, non-US jurisdiction.
     """
     NOTES_TEMPLATE = (
-        "Tier 1 — Global commodity. ICE Brent crude: global benchmark for ~2/3 of world oil trade. "
-        "Ontario supply chain: Brent (Tier 1) → TCPL pipeline utilization (Tier 2) → "
+        "Tier 1 - Global commodity. ICE Brent crude: global benchmark for ~2/3 of world oil trade. "
+        "Ontario supply chain: Brent (Tier 1) -> TCPL pipeline utilization (Tier 2) -> "
         "Toronto pump price / IESO gas dispatch (Tier 3). "
         "CAD/USD amplifies or dampens pass-through to Ontario consumers. "
         "Warn >$80/bbl (refinery margin pressure), Alert >$100/bbl (Hormuz disruption threshold). "
         "Source: {source}."
     )
 
-    # ── Source 1: FRED DCOILBRENTEU ───────────────────────────────────────────
-    # CSV endpoint — no API key, returns full history, last row = most recent business day
-    fred_url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DCOILBRENTEU"
-    fred_error = "FRED: not attempted"
+    errors = []
+
+    # Source 1: datasets/oil-prices GitHub raw CSV
+    # Mirrored daily from EIA. Always reachable from GitHub Actions.
+    # Format: Date,Price  e.g. 2026-03-21,69.43
+    datahub_url = ("https://raw.githubusercontent.com/datasets/oil-prices"
+                   "/main/data/brent-daily.csv")
     try:
-        r = SESSION.get(fred_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=TIMEOUT)
+        r = SESSION.get(datahub_url, headers={"User-Agent": "Mozilla/5.0"},
+                        timeout=TIMEOUT)
         r.raise_for_status()
         lines = r.text.strip().splitlines()
-        # Header: DATE,DCOILBRENTEU
-        # Rows: 1987-05-20,18.63  — missing values shown as "."
-        fred_error = "FRED: all rows missing or null"
+        for row in reversed(lines[1:]):
+            parts = row.split(",")
+            if len(parts) >= 2 and parts[1].strip() not in ("", ".", "N/D"):
+                date_str = parts[0].strip()
+                price = round(float(parts[1].strip()), 2)
+                return [_ok("Brent Crude Price", price, "USD/bbl",
+                            "EIA via datasets/oil-prices (GitHub)", datahub_url,
+                            date_str,
+                            NOTES_TEMPLATE.format(
+                                source="EIA Brent spot price mirrored daily at "
+                                       "datasets/oil-prices on GitHub"))]
+        errors.append("datahub: all rows missing or null")
+    except Exception as e:
+        errors.append(f"datahub: {e}")
+
+    # Source 2: FRED DCOILBRENTEU
+    fred_url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DCOILBRENTEU"
+    try:
+        r = SESSION.get(fred_url, headers={"User-Agent": "Mozilla/5.0"},
+                        timeout=TIMEOUT)
+        r.raise_for_status()
+        lines = r.text.strip().splitlines()
         for row in reversed(lines[1:]):
             parts = row.split(",")
             if len(parts) == 2 and parts[1].strip() not in ("", ".", "N/D"):
                 date_str = parts[0].strip()
                 price = round(float(parts[1].strip()), 2)
                 return [_ok("Brent Crude Price", price, "USD/bbl",
-                            "FRED — DCOILBRENTEU (St. Louis Fed)", fred_url, date_str,
+                            "FRED - DCOILBRENTEU (St. Louis Fed)", fred_url,
+                            date_str,
                             NOTES_TEMPLATE.format(
-                                source="FRED DCOILBRENTEU — St. Louis Federal Reserve, "
-                                       "daily ICE Brent spot price"))]
+                                source="FRED DCOILBRENTEU - St. Louis Federal Reserve "
+                                       "daily Brent spot price"))]
+        errors.append("FRED: all rows missing or null")
     except Exception as e:
-        fred_error = f"FRED: {e}"
+        errors.append(f"FRED: {e}")
 
-    # ── Source 2 & 3: Stooq CSV fallback ─────────────────────────────────────
-    stooq_candidates = [
-        ("cb.f",  "https://stooq.com/q/d/l/?s=cb.f&i=d&l=5"),
-        ("lco.f", "https://stooq.com/q/d/l/?s=lco.f&i=d&l=5"),
-    ]
-    last_error = f"FRED failed ({fred_error}); Stooq also failed"
-    for ticker, url in stooq_candidates:
-        try:
-            r = SESSION.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=TIMEOUT)
-            r.raise_for_status()
-            lines = r.text.strip().splitlines()
-            if len(lines) < 2:
-                last_error = f"FRED failed; {ticker}: fewer than 2 lines"
-                continue
-            for row in reversed(lines[1:]):
-                parts = row.split(",")
-                if len(parts) >= 5 and parts[4].strip() not in ("", "null", "N/D"):
-                    date_str = parts[0].strip()
-                    price = round(float(parts[4].strip()), 2)
-                    return [_ok("Brent Crude Price", price, "USD/bbl",
-                                f"Stooq.com — ICE Brent ({ticker})", url, date_str,
-                                NOTES_TEMPLATE.format(source=f"Stooq.com ICE Brent futures ({ticker})"))]
-            last_error = f"FRED failed; {ticker}: all rows null/N/D"
-        except Exception as e:
-            last_error = f"FRED failed ({fred_error}); {ticker}: {e}"
-            continue
+    # Source 3: Stooq cb.f
+    stooq_url = "https://stooq.com/q/d/l/?s=cb.f&i=d&l=5"
+    try:
+        r = SESSION.get(stooq_url, headers={"User-Agent": "Mozilla/5.0"},
+                        timeout=TIMEOUT)
+        r.raise_for_status()
+        lines = r.text.strip().splitlines()
+        for row in reversed(lines[1:]):
+            parts = row.split(",")
+            if len(parts) >= 5 and parts[4].strip() not in ("", "null", "N/D"):
+                date_str = parts[0].strip()
+                price = round(float(parts[4].strip()), 2)
+                return [_ok("Brent Crude Price", price, "USD/bbl",
+                            "Stooq.com - ICE Brent (cb.f)", stooq_url,
+                            date_str,
+                            NOTES_TEMPLATE.format(
+                                source="Stooq.com ICE Brent futures (cb.f)"))]
+        errors.append("Stooq cb.f: all rows null/N/D")
+    except Exception as e:
+        errors.append(f"Stooq cb.f: {e}")
 
-    return [_err("Brent Crude Price", "FRED / Stooq.com", fred_url, last_error)]
+    return [_err("Brent Crude Price", "EIA/FRED/Stooq", datahub_url,
+                 " | ".join(errors))]
 
 
 def fetch_toronto_shelter():
