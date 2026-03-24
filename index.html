@@ -350,6 +350,13 @@
   .brief-escalated { border-color: var(--alert); }
   .brief-escalated .brief-badge { background: var(--alert-bg); color: var(--alert); }
   .brief-loading { font-size: 13px; color: var(--text3); font-style: italic; }
+  .snapshot-banner {
+    display: none;
+    background: var(--warn-bg); color: var(--warn);
+    border: 1px solid var(--warn); border-radius: 6px;
+    padding: 8px 14px; font-size: 13px; margin-bottom: 1rem;
+  }
+  .snapshot-banner a { color: var(--warn); text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -365,6 +372,7 @@
 </div>
 
 <div class="main">
+  <div id="snapshot-banner" class="snapshot-banner"></div>
   <div id="loading">Loading data…</div>
   <div id="error-msg"></div>
   <div id="brief-panel" style="display:none"></div>
@@ -386,8 +394,23 @@
 </div>
 
 <script>
-const DATA_URL = "https://data.criticalto.ca/tii_data_latest.json";
-const BRIEF_URL = "https://data.criticalto.ca/tii_brief_latest.md";
+// URL parameter override: ?data=tii_data_20250317.json freezes to a specific snapshot.
+// Used by weekly Wix blog post iframes — e.g. criticalto.ca/?data=tii_data_week_20250317.json
+// Brief override: ?brief=tii_brief_20250317.md
+// If no parameter, defaults to live latest feeds.
+(function() {
+  const params = new URLSearchParams(window.location.search);
+  const dataParam  = params.get("data");
+  const briefParam = params.get("brief");
+  window._TII_DATA_URL  = dataParam
+    ? "https://data.criticalto.ca/" + dataParam
+    : "https://data.criticalto.ca/tii_data_latest.json";
+  window._TII_BRIEF_URL = briefParam
+    ? "https://data.criticalto.ca/" + briefParam
+    : "https://data.criticalto.ca/tii_brief_latest.md";
+})();
+const DATA_URL  = window._TII_DATA_URL;
+const BRIEF_URL = window._TII_BRIEF_URL;
 
 const SECTOR_ORDER = ["energy","water","health","food","transport_logistics","environment","financial","public_safety"];
 const SECTOR_LABELS = {
@@ -1301,6 +1324,17 @@ function showError(msg) {
 }
 
 async function loadData() {
+  // If a ?data= param is set, show a snapshot banner so readers know this is a frozen view
+  const params = new URLSearchParams(window.location.search);
+  const dataParam = params.get("data");
+  if(dataParam) {
+    const banner = document.getElementById("snapshot-banner");
+    if(banner) {
+      banner.style.display = "block";
+      banner.innerHTML = `<strong>📅 Weekly snapshot</strong> — This view is frozen to <strong>${dataParam}</strong>. `
+        + `<a href="https://criticalto.ca" target="_blank">View live dashboard →</a>`;
+    }
+  }
   try {
     const res = await fetch(DATA_URL + "?t=" + Date.now(), {
       cache: "no-store",
