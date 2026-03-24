@@ -851,6 +851,7 @@ const TIER_MAP = {
   "pearson airport":                { tier: 1, sector: "transport_logistics" },
   "via rail":                       { tier: 1, sector: "transport_logistics" },
   "cn freight":                     { tier: 2, sector: "transport_logistics" },
+  "cn rail":                        { tier: 2, sector: "transport_logistics" },
   "cpkc freight":                   { tier: 2, sector: "transport_logistics" },
   "go transit service":             { tier: 2, sector: "transport_logistics" },
   "go transit active":              { tier: 2, sector: "transport_logistics" },
@@ -1005,7 +1006,7 @@ function inferSector(name) {
   if(/water|watermain|wwtp/.test(n)) return "water";
   if(/icu|er capacity|wastewater|blood|shelter/.test(n)) return "health";
   if(/cpi|grocery|food bank|inflation/.test(n)) return "food";
-  if(/ttc|ridership|port|dwell|pearson|notam|airport|cyyz|go transit|via rail|freight|labour risk|cn rail|cpkc|rail corridor/.test(n)) return "transport_logistics";
+  if(/ttc|ridership|port|dwell|pearson|notam|airport|cyyz|go transit|via rail|freight|labour risk|cn rail|cn freight|cpkc|rail corridor/.test(n)) return "transport_logistics";
   if(/aqhi|air quality|smog/.test(n)) return "environment";
   if(/bank|rate|cad|usd|fuel|price|bankruptcy|insolvency|eviction|unemployment|trreb|sales.to.new|selling price/.test(n)) return "financial";
   if(/tps|sworn|fill rate|community safety|specialized operations|police staffing/.test(n)) return "public_safety";
