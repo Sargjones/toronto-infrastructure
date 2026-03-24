@@ -1120,15 +1120,65 @@ def fetch_pearson_notams():
     Dashboard value: 0=Normal, 1=Reduced capacity, 2=Runway closure, 3=Flow control/Security
     Dashboard label: plain-English operational status
     """
-    URL = "https://plan.navcanada.ca/weather/api/alpha/?site=CYYZ&alpha=notam"
+    URL_NAVCAN = "https://plan.navcanada.ca/weather/api/alpha/?site=CYYZ&alpha=notam"
+    # FAA NOTAM Search API — covers Canadian airports, no auth required for basic queries
+    URL_FAA    = "https://notams.aim.faa.gov/notamSearch/search"
 
+    data = None
+
+    # ── Source 1: NAV Canada CFPS ─────────────────────────────────────────────
     try:
-        r = SESSION.get(URL, timeout=TIMEOUT,
-                        headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.8"})
+        r = SESSION.get(URL_NAVCAN, timeout=TIMEOUT,
+                        headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.10",
+                                 "Accept": "application/json",
+                                 "Referer": "https://plan.navcanada.ca/"})
         r.raise_for_status()
-        data = r.json()
-    except (requests.RequestException, json.JSONDecodeError) as e:
-        return [_err("Pearson Airport Operations", "NAV Canada CFPS", URL, str(e))]
+        candidate = r.json()
+        if isinstance(candidate.get("data"), list):
+            data = candidate
+            URL = URL_NAVCAN
+    except Exception:
+        pass
+
+    # ── Source 2: FAA NOTAM Search API ───────────────────────────────────────
+    if data is None:
+        try:
+            payload = {
+                "icaoLocation": "CYYZ",
+                "notamType": "ALL",
+                "radius": 0,
+            }
+            r = SESSION.post(URL_FAA, json=payload, timeout=TIMEOUT,
+                             headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.10",
+                                      "Content-Type": "application/json"})
+            r.raise_for_status()
+            faa = r.json()
+            # FAA response schema: {"notamList": [...], "totalNotamCount": N}
+            # Normalise to NAV Canada format: {"data": [...]}
+            notam_list = faa.get("notamList", [])
+            if notam_list:
+                # Convert FAA NOTAM objects to a parseable format
+                # FAA stores NOTAM text in "icaoMessage" field
+                converted = []
+                for n in notam_list:
+                    raw = n.get("icaoMessage", n.get("traditionalMessage", ""))
+                    converted.append({
+                        "pk": n.get("notamNumber", ""),
+                        "text": json.dumps({"raw": raw}),
+                        "startValidity": n.get("effectiveStart", ""),
+                        "endValidity":   n.get("effectiveEnd", ""),
+                    })
+                data = {"data": converted}
+                URL = URL_FAA
+        except Exception:
+            pass
+
+    # ── No data from either source ────────────────────────────────────────────
+    if data is None:
+        return [_err("Pearson Airport Operations", "NAV Canada CFPS / FAA NOTAM",
+                     URL_NAVCAN,
+                     "Both NAV Canada and FAA NOTAM endpoints unreachable. "
+                     "Manual check: plan.navcanada.ca (CFPS) or notams.aim.faa.gov")]
 
     notams = data.get("data", [])
     total = len(notams)
@@ -1666,7 +1716,7 @@ def fetch_freight_rail_labour_risk():
     meaning full stoppage is legally permitted.
     """
     sources = [
-        ("CN Rail", "https://www.cn.ca/en/media/bargaining-updates/",
+        ("CN", "https://www.cn.ca/en/media/bargaining-updates/",
          "CN — cn.ca/media/bargaining-updates"),
         ("CPKC",    "https://www.cpkcr.com/en/media/news-releases",
          "CPKC — cpkcr.com/media/news-releases"),
@@ -1688,7 +1738,15 @@ def fetch_freight_rail_labour_risk():
             soup = BeautifulSoup(r.content, "html.parser")
             text = soup.get_text(" ", strip=True).lower()
 
-            if any(k in text for k in imminent_keywords):
+            # Content length guard — CN/CPKC pages are JS-rendered.
+            # Nav shell contains "bargaining" as a menu link, causing false
+            # positives. If page has < 1200 chars of text it is nav-only;
+            # return baseline 0 rather than scanning nav keywords.
+            # Actual bargaining update pages contain news article text (3000+ chars).
+            if len(text) < 1200:
+                risk = 0
+                risk_label = "Baseline — page JS-rendered, no active dispute text detected"
+            elif any(k in text for k in imminent_keywords):
                 risk = 2
                 risk_label = "Strike/lockout imminent or active"
             elif any(k in text for k in resolved_keywords):
