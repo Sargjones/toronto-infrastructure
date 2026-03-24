@@ -2658,6 +2658,7 @@ def run_all_scrapers(sector_filter=None, dry_run=False, skip_connectivity_check=
             try:
                 items = fn()
                 for item in items:
+                    item["sector"] = sector   # stamp sector so dashboard doesn't need inferSector
                     apply_thresholds(item)
                     s, v, u, n = (item.get(k) for k in ["status","value","unit","indicator"])
                     tn = item.get("threshold_note","")
