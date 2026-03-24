@@ -1,5 +1,5 @@
 """
-Toronto Infrastructure Intelligence (TII) — Data Scraper v2.9
+Toronto Infrastructure Intelligence (TII) — Data Scraper v2.10
 ==============================================================
 Fixes vs v1.3:
   1. IESO XML: replaced BeautifulSoup(html.parser) with xml.etree.ElementTree
@@ -70,10 +70,13 @@ def _err(indicator, source, url, error_msg):
             "url": url, "retrieved_at": datetime.utcnow().isoformat() + "Z",
             "data_date": None, "status": "error", "notes": f"ERROR: {error_msg}"}
 
-def _manual(indicator, source, notes):
-    return {"indicator": indicator, "value": None, "unit": None, "source": source,
-            "url": None, "retrieved_at": datetime.utcnow().isoformat() + "Z",
-            "data_date": None, "status": "manual", "notes": notes}
+def _manual(indicator, source, notes, sector=None):
+    r = {"indicator": indicator, "value": None, "unit": None, "source": source,
+         "url": None, "retrieved_at": datetime.utcnow().isoformat() + "Z",
+         "data_date": None, "status": "manual", "notes": notes}
+    if sector:
+        r["sector"] = sector
+    return r
 
 
 # ── Threshold rules ────────────────────────────────────────────────────────
@@ -1353,7 +1356,8 @@ def fetch_ontario_er_capacity():
                     "Manual retrieval: health.gov.on.ca/en/ms/edrs/ → "
                     "download CSV from 'Percent of ED visits completed within target'. "
                     "Or check data.ontario.ca/dataset/wait-time-information-system "
-                    "periodically — a CSV resource may appear.")]
+                    "periodically — a CSV resource may appear.",
+                    sector="health")]
 
 
 def fetch_phac_wastewater():
@@ -1388,7 +1392,8 @@ def fetch_phac_wastewater():
             continue
     return [_manual("Wastewater Virus Signal", "PHAC Wastewater Dashboard",
                     "SPA — visit health-infobase.canada.ca/wastewater/ → DevTools → Network "
-                    "→ find JSON/CSV endpoint. Levels: Low / Moderate / High.")]
+                    "→ find JSON/CSV endpoint. Levels: Low / Moderate / High.",
+                    sector="health")]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1558,7 +1563,8 @@ def fetch_ttc_ridership():
                     "ttc.ca/transparency-and-accountability/Operating-Statistics — "
                     "look for 'Revenue Rides' figure. "
                     "Toronto Open Data only has 1985-2019 historical XLSX. "
-                    "Will auto-fetch if a live resource appears on the package.")]
+                    "Will auto-fetch if a live resource appears on the package.",
+                    sector="transport_logistics")]
 
 
 
@@ -2053,7 +2059,8 @@ def fetch_ontario_icu_occupancy():
                     "CCSO data is restricted to authorized hospital users (PHIPA). "
                     "Manual retrieval: publichealthontario.ca → Data & Analysis → "
                     "Respiratory Virus Tool → Hospital/ICU tab. "
-                    "Will auto-fetch if data.ontario.ca dataset is reinstated.")]
+                    "Will auto-fetch if data.ontario.ca dataset is reinstated.",
+                    sector="health")]
 
 
 def fetch_osb_insolvency():
@@ -2207,7 +2214,8 @@ def fetch_enbridge_operational_status():
                 "Page requires JavaScript rendering — not parseable via static fetch. "
                 "Manual check: enbridgegas.com/storage-transportation/operational-information/operational-status "
                 "Traffic light states: Green=No constraints, Yellow=Interruptible impacted, Red=Firm services impacted. "
-                "Key path to check: Dawn to Parkway (primary GTA supply corridor)."
+                "Key path to check: Dawn to Parkway (primary GTA supply corridor).",
+                sector="energy"
             )]
 
         # The Enbridge operational status page is fully JavaScript-rendered.
@@ -2353,7 +2361,8 @@ def fetch_dawn_storage_level():
         "Look for aggregate Dawn + Tecumseh volume in Bcf. "
         "Capacity: ~284 Bcf working capacity. "
         "Warn threshold: <150 Bcf entering winter (Oct). Alert: <100 Bcf. "
-        "Also available via CER market snapshots: cer-rec.gc.ca/en/data-analysis/energy-markets/market-snapshots/"
+        "Also available via CER market snapshots: cer-rec.gc.ca/en/data-analysis/energy-markets/market-snapshots/",
+        sector="energy"
     )]
 
 
@@ -2370,24 +2379,32 @@ def get_manual_placeholders():
                 "viewId=b7626c3d-feea-40d6-ae65-944aa67ffeea. "
                 "Manual: outagemap.torontohydro.com — updated every 10 min. "
                 "Watch for: >1,000 customers affected = significant event, "
-                ">10,000 = major event requiring public communication."),
+                ">10,000 = major event requiring public communication.",
+                sector="energy"),
         _manual("Grid Reserve Margin", "IESO Reliability Outlook (quarterly PDF)",
                 "ieso.ca → Planning and Forecasting → Reliability Outlook → latest PDF. "
-                "Find 'Reserve Above Requirement' figure. Update quarterly."),
+                "Find 'Reserve Above Requirement' figure. Update quarterly.",
+                sector="energy"),
         _manual("WWTP ECA Compliance", "City of Toronto WWTP Annual Reports (annual PDF)",
                 "toronto.ca WWTP reports → download all 4 plant PDFs (~March 31). "
-                "Section B = ECA compliance table."),
+                "Section B = ECA compliance table.",
+                sector="water"),
         _manual("O-Neg Blood Supply", "Canadian Blood Services",
-                "No public API. blood.ca for status. Contact media@blood.ca."),
+                "No public API. blood.ca for status. Contact media@blood.ca.",
+                sector="health"),
         _manual("Food Bank Demand Index", "Daily Bread Food Bank (quarterly PDF)",
-                "dailybread.ca/research-and-advocacy/ → quarterly reports."),
+                "dailybread.ca/research-and-advocacy/ → quarterly reports.",
+                sector="food"),
         _manual("LTB Eviction Filings", "LTB Quarterly Statistics PDF",
-                "tribunalsontario.ca/ltb/resources/ → Statistics PDF."),
+                "tribunalsontario.ca/ltb/resources/ → Statistics PDF.",
+                sector="financial"),
         _manual("Lake Ontario Source Quality", "Toronto Water Source Monitoring Reports",
                 "toronto.ca/services-payments/water-environment/water-treatment/"
-                "drinking-water-quality-monitoring-reports/"),
+                "drinking-water-quality-monitoring-reports/",
+                sector="water"),
         _manual("Port of Montreal Dwell Time", "Port of Montreal Statistics",
-                "port-montreal.com/en/operations/port-statistics → monthly PDF."),
+                "port-montreal.com/en/operations/port-statistics → monthly PDF.",
+                sector="transport_logistics"),
     ]
 
 
