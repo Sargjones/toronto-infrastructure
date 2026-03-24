@@ -1,0 +1,29 @@
+name: Weekly Snapshot
+
+on:
+  schedule:
+    - cron: '0 14 * * 1'   # Monday 14:00 UTC = 9:00 AM ET (10 AM EDT)
+  workflow_dispatch:         # Allow manual trigger
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create weekly snapshot
+        run: |
+          DATE=$(date -u +%Y%m%d)
+          # Copy latest data and brief to dated weekly anchor files
+          cp tii_data_latest.json tii_data_week_${DATE}.json
+          cp tii_brief_latest.md  tii_brief_week_${DATE}.md  2>/dev/null || true
+          echo "Created snapshot for week of ${DATE}"
+
+      - name: Commit snapshot
+        run: |
+          DATE=$(date -u +%Y%m%d)
+          git config user.name  "TII Snapshot Bot"
+          git config user.email "actions@github.com"
+          git add tii_data_week_*.json tii_brief_week_*.md
+          git diff --cached --quiet || git commit -m "Weekly snapshot — week of ${DATE}"
+          git push
