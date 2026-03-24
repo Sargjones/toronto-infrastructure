@@ -883,56 +883,6 @@ const TIER_MAP = {
   "port of montreal":               { tier: 2, sector: "transport_logistics" },
   "ttc ridership":                  { tier: 3, sector: "transport_logistics" },
 
-  // TRANSPORT & LOGISTICS — RAIL
-  "go transit service": {
-    title: "GO Transit regional rail",
-    body: "GO Transit operates 7 commuter rail lines radiating from Union Station, plus UP Express to Pearson Airport. " +
-          "Lines: Lakeshore East (Oshawa), Lakeshore West (Niagara Falls/Hamilton), Kitchener, Barrie, Stouffville, " +
-          "Milton, and Richmond Hill. " +
-          "Approximately 70,000 weekday riders pre-pandemic, recovering toward that level post-COVID. " +
-          "Trains run on CN-owned track for most lines, meaning freight congestion and CN maintenance windows directly affect GO schedules. " +
-          "A major GO disruption cascades immediately into Highway 401/QEW congestion and TTC overcrowding at Union Station. " +
-          "Metrolinx (the operator) is also building Ontario Line, Eglinton Crosstown LRT, and the Bowmanville Extension. " +
-          "Severity: 0=Normal, 1=Minor alerts on individual lines, 2=Major disruption affecting multiple lines or Union Station."
-  },
-  "go transit active": {
-    title: "GO Transit regional rail",
-    body: "Active service alert count across all GO lines and UP Express. " +
-          "Individual line delays are common during winter weather, infrastructure work, and freight conflicts. " +
-          "GO Transit runs on CN track for most of the network — CN freight priority means GO trains can be held for freight passage. " +
-          "The Lakeshore West corridor recently had a 2-day planned service suspension for track work between Union and Aldershot."
-  },
-  "via rail": {
-    title: "VIA Rail — Quebec City-Windsor Corridor",
-    body: "VIA Rail's Corridor is Canada's busiest intercity passenger rail route, connecting Windsor-Toronto-Ottawa-Montreal-Quebec City. " +
-          "Key Toronto trains: 50/51 (Toronto-Montreal, ~5hrs), 60/61 (Toronto-Ottawa, ~4.5hrs). " +
-          "VIA operates on CN-owned track for 97% of its network — it has no priority over freight, leading to chronic on-time performance issues. " +
-          "In February 2025 the federal government rebranded the VIA High Frequency Rail project as Alto, a proposed high-speed corridor. " +
-          "Corridor disruptions affect business travel, government connectivity, and tourist flows into Toronto. " +
-          "Severity: 0=On time/minor, 1=Delays, 2=Cancellations or suspended service."
-  },
-  "cn freight labour": {
-    title: "CN Rail — freight labour risk",
-    body: "CN Rail (Canadian National) operates the Oakville Subdivision (lakeshore) and Kingston Subdivision through Toronto — " +
-          "the primary corridors for fuel, auto parts, chemicals, and grain moving through the GTHA. " +
-          "CN's Brampton Intermodal Terminal (Malport) is one of the largest container facilities in eastern Canada. " +
-          "GO Transit trains share CN track on most lines; a CN labour stoppage directly affects GO schedules. " +
-          "In August 2024, CN locked out 6,000 Teamsters workers — the federal government intervened with binding arbitration within 17 hours. " +
-          "Under the Canada Labour Code, rail is not classified as an essential service, meaning a full stoppage is legally permitted. " +
-          "A simultaneous CN/CPKC stoppage has been estimated to cost ~$1 billion per day in Canadian trade disruption. " +
-          "Risk: 0=No dispute, 1=Active negotiations, 2=Strike notice or lockout active."
-  },
-  "cpkc freight labour": {
-    title: "CPKC — freight labour risk",
-    body: "CPKC (Canadian Pacific Kansas City) operates through Toronto's north end, including Agincourt Yard — " +
-          "one of the largest classification yards in eastern Canada. " +
-          "CPKC's network extends from Vancouver to the Gulf of Mexico and into Mexico, making it a key North American trade spine. " +
-          "30,000 GO Transit commuters were directly affected when CPKC trains stopped running during the August 2024 dispute " +
-          "because GO Transit's Milton line shares CPKC track. " +
-          "CPKC locked out 3,300 Teamsters workers simultaneously with CN in August 2024 — the first dual stoppage in Canadian history. " +
-          "Risk: 0=No dispute, 1=Active negotiations, 2=Strike notice or lockout active."
-  },
-
   // PUBLIC SAFETY
   "tps sworn":                      { tier: 1, sector: "public_safety" },
   "tps civilian":                   { tier: 1, sector: "public_safety" },
