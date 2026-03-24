@@ -162,6 +162,14 @@
   .card.is-alert { border-color: var(--alert); background: var(--alert-bg); }
   .card.is-warn  { border-color: var(--warn);  background: var(--warn-bg); }
   .card.is-manual { opacity: .65; }
+  /* Muted transport cards — present but lower visual urgency */
+  .card.is-muted { opacity: .8; }
+  .card.is-muted.is-alert {
+    border-color: var(--warn); background: var(--warn-bg);
+  }
+  .card.is-muted.is-alert .card-value { color: var(--warn); }
+  .card.is-muted.is-alert .card-note  { color: var(--warn); }
+  .card.is-muted:hover { opacity: 1; }
   .card.is-manual .card-info-btn { opacity: 1; }
   .card.is-manual:hover { opacity: 1; }
 
@@ -841,12 +849,14 @@ const TIER_MAP = {
   "wwtp eca":                       { tier: 3, sector: "health" },
   // TRANSPORT & LOGISTICS
   "pearson airport":                { tier: 1, sector: "transport_logistics" },
-  "via rail":                       { tier: 1, sector: "transport_logistics" },
   "cn freight":                     { tier: 2, sector: "transport_logistics" },
   "cpkc freight":                   { tier: 2, sector: "transport_logistics" },
   "go transit":                     { tier: 2, sector: "transport_logistics" },
   "port of montreal":               { tier: 2, sector: "transport_logistics" },
   "ttc ridership":                  { tier: 3, sector: "transport_logistics" },
+  "go transit service":             { tier: 3, sector: "transport_logistics" },
+  "go transit active":              { tier: 3, sector: "transport_logistics" },
+  "via rail":                       { tier: 3, sector: "transport_logistics" },
   // ENERGY — Enbridge Dawn
   "enbridge dawn system": {
     title: "Enbridge Gas — Dawn Hub system status",
@@ -1147,7 +1157,10 @@ function render(data) {
 
   const banners = document.getElementById("alert-banners");
   banners.innerHTML = "";
-  const alerts = results.filter(r => r.status === "alert");
+  const MUTED_INDICATORS = ["go transit", "via rail"];
+  const alerts = results.filter(r =>
+    r.status === "alert" &&
+    !MUTED_INDICATORS.some(m => (r.indicator||"").toLowerCase().includes(m)));
   if(alerts.length > 0) {
     const b = document.createElement("div");
     b.className = "alert-banner";
@@ -1177,8 +1190,13 @@ function render(data) {
   function buildCard(r) {
     const s = r.status || "manual";
     const isManual = s === "manual" || r.value === null;
+    // Muted indicators — valid signals but lower consequence than critical infrastructure
+    const MUTED_INDICATORS = ["go transit", "via rail"];
+    const isMuted = MUTED_INDICATORS.some(m => (r.indicator||"").toLowerCase().includes(m));
     const card = document.createElement("div");
-    card.className = "card" + (s==="alert"?" is-alert":s==="warn"?" is-warn":isManual?" is-manual":"");
+    card.className = "card"
+      + (s==="alert"?" is-alert":s==="warn"?" is-warn":isManual?" is-manual":"")
+      + (isMuted?" is-muted":"");
 
     let noteHtml = "";
     if(r.threshold_note && !isManual) {
