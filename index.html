@@ -163,7 +163,7 @@
   .card.is-warn  { border-color: var(--warn);  background: var(--warn-bg); }
   .card.is-manual { opacity: .65; }
   /* Muted transport cards — present but lower visual urgency */
-  .card.is-muted { opacity: .8; }
+  .card.is-muted { opacity: .7; }
   .card.is-muted.is-alert {
     border-color: var(--warn); background: var(--warn-bg);
   }
@@ -849,14 +849,13 @@ const TIER_MAP = {
   "wwtp eca":                       { tier: 3, sector: "health" },
   // TRANSPORT & LOGISTICS
   "pearson airport":                { tier: 1, sector: "transport_logistics" },
+  "via rail":                       { tier: 1, sector: "transport_logistics" },
   "cn freight":                     { tier: 2, sector: "transport_logistics" },
   "cpkc freight":                   { tier: 2, sector: "transport_logistics" },
-  "go transit":                     { tier: 2, sector: "transport_logistics" },
+  "go transit service":             { tier: 2, sector: "transport_logistics" },
+  "go transit active":              { tier: 2, sector: "transport_logistics" },
   "port of montreal":               { tier: 2, sector: "transport_logistics" },
   "ttc ridership":                  { tier: 3, sector: "transport_logistics" },
-  "go transit service":             { tier: 3, sector: "transport_logistics" },
-  "go transit active":              { tier: 3, sector: "transport_logistics" },
-  "via rail":                       { tier: 3, sector: "transport_logistics" },
   // ENERGY — Enbridge Dawn
   "enbridge dawn system": {
     title: "Enbridge Gas — Dawn Hub system status",
@@ -970,9 +969,9 @@ const TIER_META = {
     3: "Community & social determinants",
   },
   transport_logistics: {
-    1: "External & intercity gateways",
+    1: "International & intercity gateways",
     2: "Regional freight & commuter rail",
-    3: "Local mobility",
+    3: "City transportation",
   },
   public_safety: {
     1: "Authorized strength",
@@ -1157,7 +1156,7 @@ function render(data) {
 
   const banners = document.getElementById("alert-banners");
   banners.innerHTML = "";
-  const MUTED_INDICATORS = ["go transit", "via rail"];
+  const MUTED_INDICATORS = ["go transit"];
   const alerts = results.filter(r =>
     r.status === "alert" &&
     !MUTED_INDICATORS.some(m => (r.indicator||"").toLowerCase().includes(m)));
@@ -1191,7 +1190,7 @@ function render(data) {
     const s = r.status || "manual";
     const isManual = s === "manual" || r.value === null;
     // Muted indicators — valid signals but lower consequence than critical infrastructure
-    const MUTED_INDICATORS = ["go transit", "via rail"];
+    const MUTED_INDICATORS = ["go transit"];
     const isMuted = MUTED_INDICATORS.some(m => (r.indicator||"").toLowerCase().includes(m));
     const card = document.createElement("div");
     card.className = "card"
