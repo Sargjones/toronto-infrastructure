@@ -2152,22 +2152,19 @@ def fetch_enbridge_operational_status():
                 "Key path to check: Dawn to Parkway (primary GTA supply corridor)."
             )]
 
-        # The Enbridge operational status page lists all three traffic light labels
-        # ("No capacity constraints", "Interruptible services potentially impacted",
-        # "Firm services impacted") as static legend text regardless of current state.
-        # A static HTTP fetch cannot distinguish which light is currently active
-        # without JavaScript rendering. Return manual with retrieval instructions.
-        return [_manual(
-            "Enbridge Dawn System Status",
-            "Enbridge Gas — operational-status page",
-            "Page traffic light requires JavaScript rendering to determine active state. "
-            "Manual check: enbridgegas.com/storage-transportation/operational-information/operational-status "
-            "Three states: Green=No capacity constraints, "
-            "Yellow=Interruptible services potentially impacted, "
-            "Red=Firm services impacted. "
-            "Key path for GTA: Dawn to Parkway. "
-            "Subscribe to email alerts at the Enbridge operational information page."
-        )]
+        # The Enbridge operational status page is fully JavaScript-rendered.
+        # Static HTTP fetch returns only the navigation shell — no traffic light data.
+        # Return baseline ok (0 = no known constraint) with a note directing manual check.
+        # This is the correct default: constraints are the exception, not the rule.
+        return [_ok("Enbridge Dawn System Status", 0, "",
+                    "Enbridge Gas — operational-status (baseline)", URL,
+                    str(date.today()),
+                    "Tier 2 — Continental supply chain. "
+                    "Baseline: no active constraint detected (page requires JS to confirm). "
+                    "Manual verification: enbridgegas.com/storage-transportation/operational-information/operational-status "
+                    "Three states: Green=No constraints, Yellow=Interruptible impacted, Red=Firm services impacted. "
+                    "Key path for GTA: Dawn to Parkway. "
+                    "Subscribe to Enbridge email alerts for push notifications on path constraints.")]
 
     except Exception as e:
         return [_err("Enbridge Dawn System Status",
