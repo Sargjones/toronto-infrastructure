@@ -1,5 +1,5 @@
 """
-Toronto Infrastructure Intelligence (TII) — Data Scraper v2.10
+Toronto Infrastructure Intelligence (TII) — Data Scraper v2.10 24 Mar 26 1957H v30-2
 ==============================================================
 Fixes vs v1.3:
   1. IESO XML: replaced BeautifulSoup(html.parser) with xml.etree.ElementTree
@@ -1183,127 +1183,126 @@ def fetch_pearson_notams():
                      "Both NAV Canada and FAA NOTAM endpoints unreachable. "
                      "Manual check: plan.navcanada.ca (CFPS) or notams.aim.faa.gov")]
 
-    notams = data.get("data", [])
-    total = len(notams)
+    # URL may not be defined if both sources returned empty without raising
+    try:
+        _active_url = URL
+    except NameError:
+        _active_url = URL_NAVCAN
 
-    # Parse each NOTAM
-    parsed = []
-    for n in notams:
-        try:
-            text_obj = json.loads(n.get("text", "{}"))
-            raw = text_obj.get("raw", "")
-        except (json.JSONDecodeError, TypeError):
-            raw = str(n.get("text", ""))
+    try:
+        notams = data.get("data", [])
+        total = len(notams)
 
-        # Extract Q-code (subject code, 5th segment of Q line)
-        q_code = ""
-        e_text = ""
-        for line in raw.splitlines():
-            line = line.strip()
-            if line.startswith("Q)"):
-                parts = line.split("/")
-                if len(parts) >= 2:
-                    q_code = parts[1].strip()
-            if line.startswith("E)"):
-                e_text = line[2:].strip()
+        # Parse each NOTAM
+        parsed = []
+        for n in notams:
+            try:
+                text_obj = json.loads(n.get("text", "{}"))
+                raw = text_obj.get("raw", "")
+            except (json.JSONDecodeError, TypeError):
+                raw = str(n.get("text", ""))
 
-        parsed.append({
-            "pk":       n.get("pk", ""),
-            "start":    n.get("startValidity", "")[:16],
-            "end":      n.get("endValidity", "")[:16],
-            "q_code":   q_code,
-            "e_text":   e_text,
-            "raw":      raw,
-        })
+            # Extract Q-code and E) text
+            q_code = ""
+            e_text = ""
+            for line in raw.splitlines():
+                line = line.strip()
+                if line.startswith("Q)"):
+                    parts = line.split("/")
+                    if len(parts) >= 2:
+                        q_code = parts[1].strip()
+                if line.startswith("E)"):
+                    e_text = line[2:].strip()
 
-    # ── Classification ────────────────────────────────────────────────────
-    severity     = 0
-    status_label = "Normal operations"
-    active_flags = []
+            parsed.append({
+                "pk":     n.get("pk", ""),
+                "start":  n.get("startValidity", "")[:16],
+                "end":    n.get("endValidity", "")[:16],
+                "q_code": q_code,
+                "e_text": e_text,
+                "raw":    raw,
+            })
 
-    # Count runway closures
-    rwy_closures = [p for p in parsed if p["q_code"] in ("QMRLC", "QMRXX")
-                    and "CLSD" in p["e_text"].upper()]
-
-    # Check for ATC flow control / ground delay program
-    flow_keywords = ["FLOW", "GDP", "EDCT", "GROUND DELAY", "GROUND STOP",
-                     "TMI", "TRAFFIC MANAGEMENT", "MIT ", "MINIT"]
-    flow_notams = [p for p in parsed
-                   if any(kw in p["e_text"].upper() or kw in p["raw"].upper()
-                          for kw in flow_keywords)]
-
-    # Check for security / geopolitical / airspace restriction
-    security_keywords = ["SECURITY", "TFR", "RESTRICTED AIRSPACE", "PROHIBITED",
-                         "MILITARY", "HOSTILE", "SHOOT DOWN", "AIR DEFENCE"]
-    # QOECH = airspace restriction, QXXXX = special notice
-    security_notams = [p for p in parsed
-                       if p["q_code"] in ("QOECH", "QRTCA", "QRPCA")
-                       or any(kw in p["e_text"].upper() or kw in p["raw"].upper()
-                              for kw in security_keywords)]
-
-    # Check for significant approach/procedure suspensions
-    approach_suspended = [p for p in parsed
-                          if p["q_code"].startswith("QPI") and
-                          any(kw in p["e_text"].upper()
-                              for kw in ["U/S", "UNSERVICEABLE", "NOT AVBL",
-                                         "SUSPENDED", "CLSD"])]
-
-    # VOR/ILS/ATIS unserviceable
-    navaid_us = [p for p in parsed
-                 if p["q_code"] in ("QNVAS", "QILAS", "QSAAS", "QICAS")
-                 or (p["q_code"].startswith("QNV") and "U/S" in p["e_text"].upper())]
-
-    # ── Determine overall severity ────────────────────────────────────────
-    if security_notams:
-        severity = 3
-        descs = [p["e_text"][:60] for p in security_notams[:2]]
-        status_label = f"Security/airspace restriction — {'; '.join(descs)}"
-        active_flags.append(f"Security NOTAMs: {len(security_notams)}")
-
-    elif flow_notams:
-        severity = 3
-        descs = [p["e_text"][:60] for p in flow_notams[:2]]
-        status_label = f"ATC flow control active — {'; '.join(descs)}"
-        active_flags.append(f"Flow control NOTAMs: {len(flow_notams)}")
-
-    elif len(rwy_closures) >= 2:
-        severity = 2
-        rwys = [p["e_text"][:40] for p in rwy_closures[:3]]
-        status_label = f"Multiple runway closures — {'; '.join(rwys)}"
-        active_flags.append(f"Runway closures: {len(rwy_closures)}")
-
-    elif len(rwy_closures) == 1:
-        severity = 2
-        status_label = f"Runway closure — {rwy_closures[0]['e_text'][:60]}"
-        active_flags.append("Runway closure: 1")
-
-    elif approach_suspended:
-        severity = 1
-        status_label = f"Approach procedure affected — {approach_suspended[0]['e_text'][:60]}"
-        active_flags.append(f"Approach NOTAMs: {len(approach_suspended)}")
-
-    else:
-        severity = 0
+        # ── Classification ────────────────────────────────────────────────
+        severity     = 0
         status_label = "Normal operations"
+        active_flags = []
 
-    # Build notes with full context
-    flag_summary = ", ".join(active_flags) if active_flags else "no significant restrictions"
-    notam_breakdown = (
-        f"Runway closures: {len(rwy_closures)}, "
-        f"Flow control: {len(flow_notams)}, "
-        f"Security: {len(security_notams)}, "
-        f"Approach affected: {len(approach_suspended)}, "
-        f"Navaid U/S: {len(navaid_us)}, "
-        f"Total active NOTAMs: {total}."
-    )
-    notes = (f"{status_label}. {notam_breakdown} "
-             f"Source: NAV Canada CFPS — real-time NOTAM feed. "
-             f"Severity scale: 0=Normal, 1=Reduced capacity, "
-             f"2=Runway closure, 3=Flow control or security.")
+        rwy_closures = [p for p in parsed if p["q_code"] in ("QMRLC", "QMRXX")
+                        and "CLSD" in p["e_text"].upper()]
 
-    return [_ok("Pearson Airport Operations", severity, "",
-                "NAV Canada CFPS (CYYZ NOTAMs)", URL,
-                str(date.today()), notes)]
+        flow_keywords = ["FLOW", "GDP", "EDCT", "GROUND DELAY", "GROUND STOP",
+                         "TMI", "TRAFFIC MANAGEMENT", "MIT ", "MINIT"]
+        flow_notams = [p for p in parsed
+                       if any(kw in p["e_text"].upper() or kw in p["raw"].upper()
+                              for kw in flow_keywords)]
+
+        security_keywords = ["SECURITY", "TFR", "RESTRICTED AIRSPACE", "PROHIBITED",
+                             "MILITARY", "HOSTILE", "SHOOT DOWN", "AIR DEFENCE"]
+        security_notams = [p for p in parsed
+                           if p["q_code"] in ("QOECH", "QRTCA", "QRPCA")
+                           or any(kw in p["e_text"].upper() or kw in p["raw"].upper()
+                                  for kw in security_keywords)]
+
+        approach_suspended = [p for p in parsed
+                              if p["q_code"].startswith("QPI") and
+                              any(kw in p["e_text"].upper()
+                                  for kw in ["U/S", "UNSERVICEABLE", "NOT AVBL",
+                                             "SUSPENDED", "CLSD"])]
+
+        navaid_us = [p for p in parsed
+                     if p["q_code"] in ("QNVAS", "QILAS", "QSAAS", "QICAS")
+                     or (p["q_code"].startswith("QNV") and "U/S" in p["e_text"].upper())]
+
+        # ── Determine overall severity ────────────────────────────────────
+        if security_notams:
+            severity = 3
+            descs = [p["e_text"][:60] for p in security_notams[:2]]
+            status_label = f"Security/airspace restriction — {'; '.join(descs)}"
+            active_flags.append(f"Security NOTAMs: {len(security_notams)}")
+        elif flow_notams:
+            severity = 3
+            descs = [p["e_text"][:60] for p in flow_notams[:2]]
+            status_label = f"ATC flow control active — {'; '.join(descs)}"
+            active_flags.append(f"Flow control NOTAMs: {len(flow_notams)}")
+        elif len(rwy_closures) >= 2:
+            severity = 2
+            rwys = [p["e_text"][:40] for p in rwy_closures[:3]]
+            status_label = f"Multiple runway closures — {'; '.join(rwys)}"
+            active_flags.append(f"Runway closures: {len(rwy_closures)}")
+        elif len(rwy_closures) == 1:
+            severity = 2
+            status_label = f"Runway closure — {rwy_closures[0]['e_text'][:60]}"
+            active_flags.append("Runway closure: 1")
+        elif approach_suspended:
+            severity = 1
+            status_label = f"Approach procedure affected — {approach_suspended[0]['e_text'][:60]}"
+            active_flags.append(f"Approach NOTAMs: {len(approach_suspended)}")
+        else:
+            severity = 0
+            status_label = "Normal operations"
+
+        # Build notes
+        notam_breakdown = (
+            f"Runway closures: {len(rwy_closures)}, "
+            f"Flow control: {len(flow_notams)}, "
+            f"Security: {len(security_notams)}, "
+            f"Approach affected: {len(approach_suspended)}, "
+            f"Navaid U/S: {len(navaid_us)}, "
+            f"Total active NOTAMs: {total}."
+        )
+        notes = (f"{status_label}. {notam_breakdown} "
+                 f"Source: NAV Canada CFPS — real-time NOTAM feed. "
+                 f"Severity scale: 0=Normal, 1=Reduced capacity, "
+                 f"2=Runway closure, 3=Flow control or security.")
+
+        return [_ok("Pearson Airport Operations", severity, "",
+                    "NAV Canada CFPS (CYYZ NOTAMs)", _active_url,
+                    str(date.today()), notes)]
+
+    except Exception as e:
+        return [_err("Pearson Airport Operations", "NAV Canada CFPS / FAA NOTAM",
+                     URL_NAVCAN, f"NOTAM parse error: {e}")]
 
 
 def fetch_ontario_er_capacity():
