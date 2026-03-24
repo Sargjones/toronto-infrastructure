@@ -1171,7 +1171,9 @@ function render(data) {
 
   const bySector = {};
   for(const r of results) {
-    const s = r.sector || inferSector(r.indicator);
+    // Three-way fallback: JSON sector field → TIER_MAP sector → inferSector
+    const tierInfo = lookupTier(r.indicator);
+    const s = r.sector || (tierInfo && tierInfo.sector) || inferSector(r.indicator);
     if(!bySector[s]) bySector[s] = [];
     bySector[s].push(r);
   }
