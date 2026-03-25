@@ -1,5 +1,5 @@
 """
-Toronto Infrastructure Intelligence (TII) — Data Scraper v2.10 
+Toronto Infrastructure Intelligence (TII) — Data Scraper v2.10
 ==============================================================
 Fixes vs v1.3:
   1. IESO XML: replaced BeautifulSoup(html.parser) with xml.etree.ElementTree
@@ -1126,6 +1126,10 @@ def fetch_pearson_notams():
     URL_NAVCAN = "https://plan.navcanada.ca/weather/api/alpha/?site=CYYZ&alpha=notam"
     # FAA NOTAM Search API — covers Canadian airports, no auth required for basic queries
     URL_FAA    = "https://notams.aim.faa.gov/notamSearch/search"
+    # Legacy NAV Canada AWWS plain-text endpoint — no JS rendering required
+    URL_AWWS   = ("https://flightplanning.navcanada.ca/cgi-bin/Fore-obs/"
+                  "ewx_traiter_notam.cgi?Recall=ni_Aerodrome&Langue=anglais"
+                  "&TypeBrief=L&Rayon=50&Station=CYYZ")
 
     data = None
     URL  = URL_NAVCAN   # safe default — updated below if a source succeeds
@@ -1177,12 +1181,53 @@ def fetch_pearson_notams():
         except Exception:
             pass
 
-    # ── No data from either source ────────────────────────────────────────────
+    # ── Source 3: Legacy NAV Canada AWWS plain-text ───────────────────────────
+    # Returns raw NOTAM text without JS rendering — more likely to work from
+    # automated/cloud environments where the CFPS API is blocked.
     if data is None:
-        return [_err("Pearson Airport Operations", "NAV Canada CFPS / FAA NOTAM",
-                     URL_NAVCAN,
-                     "Both NAV Canada and FAA NOTAM endpoints unreachable. "
-                     "Manual check: plan.navcanada.ca (CFPS) or notams.aim.faa.gov")]
+        try:
+            r = SESSION.get(URL_AWWS, timeout=TIMEOUT,
+                            headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.10"})
+            r.raise_for_status()
+            raw_text = r.text
+            # AWWS returns HTML with NOTAMs embedded as plain text blocks
+            # Each NOTAM starts with its identifier (e.g. "A1234/26")
+            # Parse into our standard format: list of dicts with "text" containing raw NOTAM
+            soup_awws = BeautifulSoup(raw_text, "html.parser")
+            page_text = soup_awws.get_text("\n", strip=True)
+            # Split on NOTAM boundaries — ICAO NOTAMs start with letter+digits+/+year
+            import re as _re
+            notam_blocks = _re.split(r'\n(?=[A-Z]\d{4}/\d{2}\s)', page_text)
+            converted = []
+            for block in notam_blocks:
+                block = block.strip()
+                if not block or len(block) < 10:
+                    continue
+                # Extract NOTAM number from first line
+                first_line = block.split("\n")[0].strip()
+                pk_match = _re.match(r'([A-Z]\d{4}/\d{2})', first_line)
+                pk = pk_match.group(1) if pk_match else ""
+                converted.append({
+                    "pk":            pk,
+                    "text":          json.dumps({"raw": block}),
+                    "startValidity": "",
+                    "endValidity":   "",
+                })
+            if converted:
+                data = {"data": converted}
+                URL  = URL_AWWS
+        except Exception:
+            pass
+
+    # ── No data from any source ───────────────────────────────────────────────
+    if data is None:
+        return [_manual("Pearson Airport Operations",
+                        "NAV Canada CFPS / FAA NOTAM / AWWS",
+                        "All three NOTAM sources unreachable from automated environment. "
+                        "Manual check: plan.navcanada.ca (CFPS) → Weather & NOTAM tab → "
+                        "enter CYYZ. Severity scale: 0=Normal, 1=Reduced capacity, "
+                        "2=Runway closure, 3=Flow control or security.",
+                        sector="transport_logistics")]
 
     try:
         notams = data.get("data", [])
