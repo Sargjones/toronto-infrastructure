@@ -679,29 +679,33 @@ def fetch_toronto_shelter():
 
 def fetch_active_water_outages():
     """
-    Toronto Water — active watermain breaks and planned outages.
+    Toronto Water — active water outages.
     Source: City of Toronto ArcGIS REST API (COT_Geospatial_Water_Outage_View)
     This is the live data feed behind toronto.ca/no-water-map.
     Updated in real time as breaks are reported and restored.
 
-    Query: all records where DateandTimeServiceRestored = NULL
-    (i.e. service not yet restored = currently active)
-    and WaterOutageEdit7b_Bypass <> 1 (excludes test/bypass records)
+    Field mapping (confirmed from live schema inspection Mar 2026):
+      WaterOutageEdit7b_ReasonForShut — coded value: 1=Emergency Repair, 2=Planned Work
+      WaterOutageEdit7b_DateandTimeof — outage start (epoch ms)
+      WaterOutageEdit7b_Bypass        — 1=test/bypass record (excluded)
+      Est_Num_Properties_Affected     — estimated properties without water
+      EstRestorationDateTime          — estimated restoration (epoch ms)
 
-    Returns:
-    - Active watermain breaks count
-    - Active planned maintenance outages count
-    - Total active outages
+    Query: service not yet restored (DateandTimeServiceRestored IS NULL)
+    and not a bypass/test record (WaterOutageEdit7b_Bypass <> 1)
     """
     BASE = ("https://services3.arcgis.com/b9WvedVPoizGfvfD/arcgis/rest/services"
             "/COT_Geospatial_Water_Outage_View/FeatureServer/0/query")
     params = {
-        "where": "DateandTimeServiceRestored = NULL AND WaterOutageEdit7b_Bypass <> 1",
+        "where": "DateandTimeServiceRestored IS NULL AND WaterOutageEdit7b_Bypass <> 1",
         "outFields": "*",
         "f": "geojson",
         "returnGeometry": "false",
     }
     url = BASE + "?" + "&".join(f"{k}={v}" for k, v in params.items())
+
+    # Coded values for WaterOutageEdit7b_ReasonForShut
+    REASON_CODES = {1: "Emergency Repair", 2: "Planned Work"}
 
     try:
         r = SESSION.get(BASE, params=params, timeout=TIMEOUT)
@@ -715,33 +719,37 @@ def fetch_active_water_outages():
         return [_err("Active Water Outages", "Toronto Water ArcGIS API", url,
                      f"API error: {data['error']}")]
 
-    # Categorise by outage type
-    # Common type field names in Toronto Water ArcGIS: OutageType, Type, ReasonForOutage
-    breaks   = 0
-    planned  = 0
-    unknown  = 0
+    emergency = 0
+    planned   = 0
+    unknown   = 0
+    total_properties = 0
     oldest_start = None
+    soonest_restore = None
+    addresses = []
+
+    from datetime import datetime as _dt
 
     for feat in features:
         props = feat.get("properties", {})
-        # Find the type field — try common names
-        type_val = (props.get("OutageType") or props.get("Type") or
-                    props.get("ReasonForOutage") or props.get("OUTAGETYPE") or "")
-        type_str = str(type_val).lower()
 
-        if any(k in type_str for k in ["break", "emergency", "watermain"]):
-            breaks += 1
-        elif any(k in type_str for k in ["planned", "maintenance", "scheduled"]):
+        reason_code = props.get("WaterOutageEdit7b_ReasonForShut")
+        reason = REASON_CODES.get(reason_code, "Unknown")
+
+        if reason_code == 1:
+            emergency += 1
+        elif reason_code == 2:
             planned += 1
         else:
             unknown += 1
 
-        # Track oldest active outage start time
-        start_ts = (props.get("DateandTimeServiceInterrupted") or
-                    props.get("StartDate") or props.get("DateTimeStart"))
+        # Properties affected
+        affected = props.get("Est_Num_Properties_Affected")
+        if affected and isinstance(affected, (int, float)) and affected > 0:
+            total_properties += int(affected)
+
+        # Outage start time
+        start_ts = props.get("WaterOutageEdit7b_DateandTimeof")
         if start_ts and isinstance(start_ts, (int, float)):
-            # ArcGIS returns epoch milliseconds
-            from datetime import datetime as _dt
             try:
                 dt = _dt.utcfromtimestamp(start_ts / 1000)
                 if oldest_start is None or dt < oldest_start:
@@ -749,28 +757,52 @@ def fetch_active_water_outages():
             except (ValueError, OSError):
                 pass
 
+        # Estimated restoration
+        restore_ts = props.get("EstRestorationDateTime")
+        if restore_ts and isinstance(restore_ts, (int, float)):
+            try:
+                dt = _dt.utcfromtimestamp(restore_ts / 1000)
+                if soonest_restore is None or dt < soonest_restore:
+                    soonest_restore = dt
+            except (ValueError, OSError):
+                pass
+
+        # Collect addresses for context
+        addr = props.get("WaterOutageEdit7b_Address", "")
+        if addr:
+            addresses.append(str(addr))
+
     total = len(features)
-    oldest_str = oldest_start.strftime("%Y-%m-%d %H:%M UTC") if oldest_start else "unknown"
+    oldest_str  = oldest_start.strftime("%Y-%m-%d %H:%M UTC") if oldest_start else "unknown"
+    restore_str = soonest_restore.strftime("%Y-%m-%d %H:%M UTC") if soonest_restore else "unknown"
+    addr_str    = ", ".join(addresses[:5]) + ("..." if len(addresses) > 5 else "")
+    props_str   = f"{total_properties:,} properties affected. " if total_properties > 0 else ""
 
     results = [
         _ok("Active Water Outages", total, "active outages",
             "Toronto Water — No Water Map (ArcGIS)", url, str(date.today()),
-            f"Breaks: {breaks}, Planned maintenance: {planned}, Other: {unknown}. "
+            f"Emergency repairs: {emergency}, Planned work: {planned}, Other: {unknown}. "
+            f"{props_str}"
             f"Oldest active since: {oldest_str}. "
+            f"Earliest est. restoration: {restore_str}. "
+            f"Active locations: {addr_str}. "
             f"Source: toronto.ca/no-water-map — real-time feed."),
     ]
 
-    # Add breakdown indicators if there are active breaks
-    if breaks > 0:
-        results.append(_ok("Active Watermain Breaks", breaks, "breaks",
+    if emergency > 0:
+        results.append(_ok("Active Watermain Breaks", emergency, "emergency repairs",
                            "Toronto Water — No Water Map (ArcGIS)", url,
                            str(date.today()),
-                           "Emergency watermain breaks with service interrupted."))
+                           f"Emergency water repairs with service interrupted. "
+                           f"{props_str}"
+                           f"Locations: {addr_str}. "
+                           f"Est. restoration: {restore_str}."))
     if planned > 0:
         results.append(_ok("Planned Maintenance Outages", planned, "outages",
                            "Toronto Water — No Water Map (ArcGIS)", url,
                            str(date.today()),
-                           "Scheduled maintenance with planned service interruption."))
+                           f"Scheduled maintenance with planned service interruption. "
+                           f"{props_str}"))
 
     return results
 
