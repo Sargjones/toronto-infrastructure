@@ -579,11 +579,22 @@ const CARD_KNOWLEDGE = {
           "Summer smog events typically involve ozone from vehicle emissions; winter events more often involve particulate from wood burning and traffic."
   },
   "wastewater": {
-    title: "Wastewater virus surveillance",
+    title: "PHAC Wastewater Surveillance — Toronto",
     body: "PHAC's national wastewater surveillance program detects viral RNA fragments in sewage — a leading indicator of community infection levels that does not depend on clinical testing rates. " +
-          "Toronto is served by three major treatment plants: Ashbridges Bay (capacity 818 ML/day, largest in Canada, serves most of the old City of Toronto and inner suburbs), Humber (capacity 473 ML/day, serves Etobicoke and northwest Toronto), and Highland Creek (capacity 98 ML/day, serves northeast Scarborough). " +
-          "Together Ashbridges Bay and Humber monitor approximately 73% of Toronto's sewershed population. " +
-          "Signal levels: Low (background), Moderate (community transmission ongoing), High (significant active transmission). Typically leads clinical case counts by 4-7 days."
+          "Four pathogens tracked: SARS-CoV-2 (COVID-19), Influenza A, Influenza B, and RSV. " +
+          "Toronto monitoring sites: Ashbridges Bay (capacity 818 ML/day, largest in Canada), Humber (473 ML/day, serves Etobicoke and northwest Toronto), Highland Creek (98 ML/day, northeast Scarborough), and North Toronto. Together they cover ~73% of Toronto's sewershed population. " +
+          "Signal levels (Non-detect → Low → Moderate → High → Very High) are normalized against historical baselines per pathogen and site. " +
+          "Typically leads clinical case counts by 4-7 days. Data published weekly. " +
+          "Source: PHAC Health Infobase API — health-infobase.canada.ca/api/wastewater"
+  },
+  "wastewater signal": {
+    title: "PHAC Wastewater Surveillance — Toronto",
+    body: "PHAC's national wastewater surveillance program detects viral RNA fragments in sewage — a leading indicator of community infection levels that does not depend on clinical testing rates. " +
+          "Four pathogens tracked: SARS-CoV-2 (COVID-19), Influenza A, Influenza B, and RSV. " +
+          "Toronto monitoring sites: Ashbridges Bay, Humber, Highland Creek, and North Toronto — together covering ~73% of the city's sewershed population. " +
+          "Signal levels (Non-detect → Low → Moderate → High → Very High) are normalized against historical baselines per pathogen and site. " +
+          "Typically leads clinical case counts by 4-7 days. Data published weekly. " +
+          "Source: PHAC Health Infobase API — health-infobase.canada.ca/api/wastewater"
   },
   "icu": {
     title: "Ontario ICU system",
@@ -882,6 +893,7 @@ const TIER_MAP = {
   "watermain break rate":           { tier: 2, sector: "water" },
   // HEALTH
   "wastewater virus":               { tier: 1, sector: "health" },
+  "wastewater signal":              { tier: 1, sector: "health" },
   "o-neg blood":                    { tier: 1, sector: "health" },
   "ontario icu":                    { tier: 2, sector: "health" },
   "er capacity":                    { tier: 2, sector: "health" },
