@@ -770,7 +770,27 @@ const CARD_KNOWLEDGE = {
           "Risk: 0=No dispute, 1=Active negotiations, 2=Strike notice or lockout active."
   },
 
-  // PUBLIC SAFETY
+  // PUBLIC SAFETY — CTSU
+  "tps counter-terrorism": {
+    title: "TPS Counter-Terrorism Security Unit (CTSU)",
+    body: "Announced March 24, 2026 by Chief Myron Demkiw, the CTSU is a new standalone TPS unit focused on detecting, preventing, and disrupting terrorism and violent extremism. " +
+          "Intelligence-led, evidence-based approach — serves as a rapid response hub liaising with the RCMP's INSET, OPP Provincial Anti-Terrorism Section, and international partners. " +
+          "Trigger context: firearm discharges at three Toronto synagogues and the U.S. Consulate (March 2026), rising hate-motivated incidents, and the upcoming FIFA World Cup (June 2026). " +
+          "The CTSU addresses threats that fall below the federal terrorism threshold but still pose serious risk — filling the gap between RCMP jurisdiction and general TPS policing. " +
+          "Posture scale: 0 = Unit established, standard intelligence operations; " +
+          "1 = Task Force Guardian active, high-visibility armed deployments at key sites; " +
+          "2 = Active incident response or elevated threat advisory issued."
+  },
+  "task force guardian": {
+    title: "Task Force Guardian — high-visibility deployments",
+    body: "The operational arm of TPS's enhanced counter-terrorism posture, launched March 24, 2026 alongside the CTSU. " +
+          "Officers with patrol rifles (semi-automatic) deployed at places of worship, tourist attractions (Nathan Phillips Square, Union Station, Harbourfront), high-traffic public spaces, and critical infrastructure. " +
+          "Chief Demkiw: 'If you see these officers, it does not mean there is an imminent threat — it means we are strategically positioning resources to protect our communities.' " +
+          "The deployment count tracks discrete Task Force Guardian activations for year-over-year threat environment comparison — a rising count signals an escalating or sustained threat environment; a declining count signals normalization. " +
+          "Source: TPS news release — tps.ca/media-centre/news-releases/65502/"
+  },
+
+  // PUBLIC SAFETY — TPS CORE
   "tps sworn": {
     title: "Toronto Police Service — sworn strength",
     body: "TPS is organized into three commands: Community Safety Command (neighbourhood policing — 17 divisions), Specialized Operations Command (Emergency Task Force, Intelligence, Guns & Gangs, Major Crime, Traffic), and Corporate Command (administrative). " +
@@ -884,6 +904,8 @@ const TIER_MAP = {
   "ttc ridership":                  { tier: 3, sector: "transport_logistics" },
 
   // PUBLIC SAFETY
+  "tps counter-terrorism":          { tier: 1, sector: "public_safety" },
+  "task force guardian":            { tier: 1, sector: "public_safety" },
   "tps sworn":                      { tier: 1, sector: "public_safety" },
   "tps civilian":                   { tier: 1, sector: "public_safety" },
   "tps uniform fill":               { tier: 2, sector: "public_safety" },
@@ -924,7 +946,7 @@ const TIER_META = {
     3: "City transportation",
   },
   public_safety: {
-    1: "Authorized strength",
+    1: "Authorized strength & security posture",
     2: "Deployment efficiency",
     3: "Operational distribution",
   },
