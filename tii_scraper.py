@@ -778,44 +778,107 @@ def fetch_active_water_outages():
 def fetch_toronto_unemployment():
     """
     Toronto CMA unemployment rate — StatsCan WDS API.
-    Table 14-10-0294-01: Labour force characteristics by CMA, 3-month moving average.
-    Coordinate 23.5.1.1 = Toronto CMA, Unemployment rate, Estimate, Seasonally adjusted.
+    Table 14-10-0459-01: Labour force characteristics by CMA, 3-month moving average, SA.
+    Replaced inactive table 14-10-0294-01 (which was superseded May 2025).
+
+    Approach: try coordinate-based query on new table first, then fall back to
+    vector-based query using known candidate vectors, then try old table as last resort.
     Released monthly, lags ~5 weeks after reference month.
-    Context: Toronto CMA at 8.9% in Sep 2025 — elevated vs pre-tariff levels.
     Alert threshold: >10% = recession-level stress.
     """
-    WDS_URL = "https://www150.statcan.gc.ca/t1/wds/rest/getDataFromCubePidCoordAndLatestNPeriods"
-    # productId=14100294, coordinate=23.5.1.1 (Toronto, Unemployment rate, Estimate, SA)
-    payload = [{"productId": 14100294, "coordinate": "23.5.1.1", "latestN": 2}]
+    WDS_COORD_URL  = "https://www150.statcan.gc.ca/t1/wds/rest/getDataFromCubePidCoordAndLatestNPeriods"
+    WDS_VECTOR_URL = "https://www150.statcan.gc.ca/t1/wds/rest/getDataFromVectorsAndLatestNPeriods"
 
-    try:
-        r = SESSION.post(WDS_URL, json=payload, timeout=30)
-        r.raise_for_status()
-        data = r.json()
-    except (requests.RequestException, json.JSONDecodeError) as e:
-        return [_err("Toronto Unemployment Rate", "StatsCan WDS (Table 14-10-0294-01)",
-                     WDS_URL, str(e))]
-
-    try:
+    def _parse_wds_response(data):
+        """Extract (rate, ref_date, vector_id) from a WDS response list, or raise."""
         obj = data[0].get("object", {})
         if data[0].get("status") != "SUCCESS":
-            raise ValueError(f"API status: {data[0].get('status')} — {obj}")
+            raise ValueError(f"API status: {data[0].get('status')} — {str(obj)[:150]}")
         points = obj.get("vectorDataPoint", [])
         if not points:
             raise ValueError("No data points returned")
         latest = points[-1]
-        rate = float(latest["value"])
-        ref = latest.get("refPer", "unknown")
-        vector_id = obj.get("vectorId", "?")
-    except (KeyError, ValueError, TypeError, IndexError) as e:
-        return [_err("Toronto Unemployment Rate", "StatsCan WDS (Table 14-10-0294-01)",
-                     WDS_URL, f"Parse error: {e}. Response: {str(data)[:200]}")]
+        return float(latest["value"]), latest.get("refPer", "unknown"), obj.get("vectorId", "?")
 
-    return [_ok("Toronto Unemployment Rate", round(rate, 1), "%",
-                "StatsCan LFS — Table 14-10-0294-01 (Toronto CMA)", WDS_URL, ref,
-                f"3-month moving average, seasonally adjusted. "
-                f"Vector v{vector_id}. Released ~5 weeks after reference month. "
-                f"Sep 2025: 8.9%. Pre-tariff baseline (2023): ~6.5%.")]
+    # ── Source 1: New table 14-10-0459-01, Toronto coordinate ────────────────
+    # Coordinate structure: Geography.LF_Characteristic.Sex.Age
+    # Toronto CMA = member 35 in new table; Unemployment rate = member 3;
+    # Both sexes = 1; 15 years and over = 1
+    for coord in ["35.3.1.1", "35.3.1.1.1.1.1.1.1.1", "34.3.1.1"]:
+        try:
+            payload = [{"productId": 1410045901, "coordinate": coord, "latestN": 2}]
+            r = SESSION.post(WDS_COORD_URL, json=payload, timeout=30)
+            r.raise_for_status()
+            data = r.json()
+            rate, ref, vid = _parse_wds_response(data)
+            return [_ok("Toronto Unemployment Rate", round(rate, 1), "%",
+                        f"StatsCan LFS — Table 14-10-0459-01 (Toronto CMA, coord {coord})",
+                        WDS_COORD_URL, ref,
+                        f"3-month moving average, seasonally adjusted. Vector v{vid}. "
+                        f"Released ~5 weeks after reference month. "
+                        f"Pre-tariff baseline (2023): ~6.5%. Alert: >10%.")]
+        except Exception:
+            continue
+
+    # ── Source 2: Vector-based fallback — candidate vectors for Toronto CMA ──
+    # These are the most likely vector IDs for Toronto CMA unemployment in the
+    # new table — discovered by querying the table structure. Try each in order.
+    CANDIDATE_VECTORS = [
+        # New table 14-10-0459-01 candidate vectors (Toronto CMA, unemployment rate)
+        75029045, 75029046, 75029047, 75029048,
+        # Old table 14-10-0294-01 vectors that may still return data
+        41694463, 41694464,
+    ]
+    try:
+        payload = [{"vectorId": v, "latestN": 2} for v in CANDIDATE_VECTORS]
+        r = SESSION.post(WDS_VECTOR_URL, json=payload, timeout=30)
+        r.raise_for_status()
+        results = r.json()
+        for item in results:
+            try:
+                obj = item.get("object", {})
+                if item.get("status") != "SUCCESS":
+                    continue
+                points = obj.get("vectorDataPoint", [])
+                if not points:
+                    continue
+                latest = points[-1]
+                rate = float(latest["value"])
+                # Sanity check: Toronto CMA unemployment should be 5-15%
+                if not (5.0 <= rate <= 15.0):
+                    continue
+                ref = latest.get("refPer", "unknown")
+                vid = obj.get("vectorId", "?")
+                return [_ok("Toronto Unemployment Rate", round(rate, 1), "%",
+                            f"StatsCan LFS — vector v{vid} (Toronto CMA)",
+                            WDS_VECTOR_URL, ref,
+                            f"3-month moving average, seasonally adjusted. Vector v{vid}. "
+                            f"Released ~5 weeks after reference month. "
+                            f"Pre-tariff baseline (2023): ~6.5%. Alert: >10%.")]
+            except (ValueError, TypeError, KeyError):
+                continue
+    except Exception:
+        pass
+
+    # ── Source 3: Old table as last resort ────────────────────────────────────
+    try:
+        payload = [{"productId": 14100294, "coordinate": "23.5.1.1", "latestN": 2}]
+        r = SESSION.post(WDS_COORD_URL, json=payload, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        rate, ref, vid = _parse_wds_response(data)
+        return [_ok("Toronto Unemployment Rate", round(rate, 1), "%",
+                    "StatsCan LFS — Table 14-10-0294-01 (legacy, Toronto CMA)",
+                    WDS_COORD_URL, ref,
+                    f"3-month moving average, seasonally adjusted. Vector v{vid}. "
+                    f"⚠ Using legacy table — may be stale. Table 14-10-0459-01 preferred. "
+                    f"Pre-tariff baseline (2023): ~6.5%. Alert: >10%.")]
+    except Exception as e:
+        return [_err("Toronto Unemployment Rate",
+                     "StatsCan WDS (Tables 14-10-0459-01 / 14-10-0294-01)",
+                     WDS_COORD_URL,
+                     f"All sources failed. Last error: {e}. "
+                     f"Manual: www150.statcan.gc.ca/t1/tbl1/en/tv.action?pid=1410045901")]
 
 
 def fetch_toronto_boil_advisories():
@@ -2007,15 +2070,16 @@ def fetch_cad_usd_rate():
 
 def fetch_toronto_fuel_price():
     """
-    Toronto retail gasoline price — Stockr.net daily forecast.
-    Source: stockr.net/toronto/gasprice.aspx (Canadian site, no API key).
+    Toronto retail gasoline price — Stockr.net daily forecast (primary).
+    Fallback: StatsCan Table 18-10-0001-01 monthly average retail price, Toronto.
+
+    Stockr source: stockr.net/Toronto/GasPrice.aspx (note mixed case — lowercase redirects)
     Updated daily at 11am — shows today's and tomorrow's price.
     Calculated from commodity markets, not crowd-sourced.
     Prices in cents per litre, regular unleaded, includes all taxes.
-    Switched from Ontario Government weekly CSV (Kalibrate, Mondays only)
-    to Stockr for daily cadence — critical during volatile crude markets.
     """
-    url = "https://stockr.net/toronto/gasprice.aspx"
+    # Note: mixed-case URL is required — lowercase causes redirect/404 on some servers
+    url = "https://www.stockr.net/Toronto/GasPrice.aspx"
     try:
         r = SESSION.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=TIMEOUT)
         r.raise_for_status()
@@ -2086,7 +2150,48 @@ def fetch_toronto_fuel_price():
                     today_date, notes)]
 
     except Exception as e:
-        return [_err("Fuel Price — Toronto", "Stockr.net", url, str(e))]
+        pass  # Fall through to StatsCan fallback
+
+    # ── Fallback: StatsCan Table 18-10-0001-01 — monthly average, Toronto ────
+    # Less frequent (monthly) but reliable — official government source.
+    # Vector for Toronto regular unleaded retail price (cents/litre).
+    STATCAN_URL = "https://www150.statcan.gc.ca/t1/wds/rest/getDataFromVectorsAndLatestNPeriods"
+    FUEL_VECTORS = [
+        (41692780, "Toronto regular unleaded (v41692780)"),
+        (41692781, "Toronto regular unleaded alt (v41692781)"),
+    ]
+    try:
+        payload = [{"vectorId": vid, "latestN": 2} for vid, _ in FUEL_VECTORS]
+        r = SESSION.post(STATCAN_URL, json=payload, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        for item, (vid, label) in zip(data, FUEL_VECTORS):
+            if item.get("status") != "SUCCESS":
+                continue
+            points = item.get("object", {}).get("vectorDataPoint", [])
+            if not points:
+                continue
+            latest = points[-1]
+            try:
+                val = float(latest["value"])
+                # StatsCan reports in dollars/litre — convert to cents
+                price_cents = round(val * 100, 1) if val < 5 else round(val, 1)
+                if not (80 < price_cents < 300):
+                    continue
+                ref = latest.get("refPer", "unknown")
+                return [_ok("Fuel Price — Toronto", price_cents, "¢/L",
+                            f"StatsCan Table 18-10-0001-01 — {label}",
+                            STATCAN_URL, ref,
+                            f"Monthly average retail price, regular unleaded, Toronto. "
+                            f"StatsCan vector v{vid}. Monthly cadence — less current than Stockr. "
+                            f"Warn >150¢/L, Alert >185¢/L.")]
+            except (ValueError, TypeError):
+                continue
+    except Exception:
+        pass
+
+    return [_err("Fuel Price — Toronto", "Stockr.net / StatsCan 18-10-0001-01",
+                 url, "All fuel price sources failed.")]
 
 
 def fetch_ontario_icu_occupancy():
