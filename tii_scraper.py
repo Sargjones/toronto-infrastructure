@@ -1,5 +1,5 @@
 """
-Toronto Infrastructure Intelligence (TII) — Data Scraper v2.10 24 Mar 26 1957H v30-2
+Toronto Infrastructure Intelligence (TII) — Data Scraper v2.10 24 Mar 26 2008H v30-3
 ==============================================================
 Fixes vs v1.3:
   1. IESO XML: replaced BeautifulSoup(html.parser) with xml.etree.ElementTree
@@ -1729,28 +1729,54 @@ def fetch_freight_rail_labour_risk():
 
     imminent_keywords  = ["strike notice", "lockout", "work stoppage", "job action",
                           "bargaining deadline", "72-hour notice", "24-hour notice"]
-    active_keywords    = ["bargaining", "negotiations", "collective agreement",
-                          "teamsters", "tcrc", "contract talks", "labour dispute"]
+    active_keywords    = ["bargaining underway", "negotiations underway", "collective agreement expires",
+                          "contract talks", "labour dispute", "at the bargaining table",
+                          "teamsters demand", "tcrc demand", "failed to reach"]
     resolved_keywords  = ["ratified", "agreement reached", "new contract", "signed",
-                          "arbitration awarded", "tentative agreement"]
+                          "arbitration awarded", "tentative agreement", "collective agreement in place",
+                          "three-year deal", "new deal", "agreement imposed"]
+    # These phrases appear on CN/CPKC pages as permanent nav/page-title text
+    # even when no dispute is active — treat as baseline 0
+    nav_false_positive = ["bargaining updates", "media centre", "news releases",
+                          "stay informed with the latest"]
+
+    # Known contract expiry dates — use to flag upcoming negotiation windows
+    CONTRACT_EXPIRY = {
+        "CN":   "2026-12-31",   # 3-yr deal from binding arbitration April 2025
+        "CPKC": "2026-12-31",   # CPKC arbitration award same period
+    }
 
     results = []
     for carrier, url, source_label in sources:
         try:
             r = SESSION.get(url, timeout=TIMEOUT,
-                            headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.9"})
+                            headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.10"})
             r.raise_for_status()
             soup = BeautifulSoup(r.content, "html.parser")
+
+            # Strip nav, header, footer, sidebar before scanning —
+            # these contain permanent "bargaining" menu links causing false positives
+            for tag in soup.find_all(["nav", "header", "footer", "aside",
+                                      "script", "style", "noscript"]):
+                tag.decompose()
+            # Also strip elements with nav-like class/id names
+            for tag in soup.find_all(attrs={"class": lambda c: c and any(
+                    k in " ".join(c).lower() for k in
+                    ["nav", "menu", "header", "footer", "sidebar", "breadcrumb"])}):
+                tag.decompose()
+
             text = soup.get_text(" ", strip=True).lower()
 
-            # Content length guard — CN/CPKC pages are JS-rendered.
-            # Nav shell contains "bargaining" as a menu link, causing false
-            # positives. If page has < 1200 chars of text it is nav-only;
-            # return baseline 0 rather than scanning nav keywords.
-            # Actual bargaining update pages contain news article text (3000+ chars).
-            if len(text) < 1200:
+            # Raised from 1200 to 4000 — CN/CPKC pages are JS-rendered;
+            # nav shell even after stripping can exceed 1200 chars.
+            # Real bargaining news articles contain 4000+ chars of body text.
+            if len(text) < 4000:
                 risk = 0
-                risk_label = "Baseline — page JS-rendered, no active dispute text detected"
+                risk_label = "Baseline — page content minimal (JS-rendered or no active updates)"
+            elif any(k in text for k in nav_false_positive):
+                # Page is the static "stay informed" placeholder — no active dispute
+                risk = 0
+                risk_label = "Baseline — dedicated bargaining page exists but no active dispute content"
             elif any(k in text for k in imminent_keywords):
                 risk = 2
                 risk_label = "Strike/lockout imminent or active"
@@ -1764,8 +1790,16 @@ def fetch_freight_rail_labour_risk():
                 risk = 0
                 risk_label = "No active labour dispute detected"
 
+            # Add contract expiry context to notes
+            expiry = CONTRACT_EXPIRY.get(carrier, "unknown")
+            expiry_note = (
+                f"Current collective agreement expires {expiry}. "
+                f"Next negotiation window opens ~6 months prior. "
+            ) if expiry != "unknown" else ""
+
             notes = (
                 f"{carrier}: {risk_label}. "
+                f"{expiry_note}"
                 f"Risk scale: 0=No dispute, 1=Active negotiations, 2=Imminent/active stoppage. "
                 f"A CN/CP simultaneous stoppage halts ~$1B/day in Canadian trade and affects "
                 f"GO Transit commuter lines sharing CN track. "
