@@ -1498,39 +1498,111 @@ def fetch_ontario_er_capacity():
 
 
 def fetch_phac_wastewater():
-    """PHAC Wastewater — unchanged (manual fallback)."""
-    for csv_url in [
-        "https://health-infobase.canada.ca/src/data/wastewater/wastewater_data.csv",
-        "https://health-infobase.canada.ca/wastewater/data/wastewater_data.csv",
-    ]:
-        try:
-            r = SESSION.get(csv_url, timeout=TIMEOUT)
-            if r.status_code == 200 and len(r.content) > 500:
-                reader = csv.DictReader(io.StringIO(r.text))
-                rows = list(reader)
-                t_rows = [row for row in rows if any(
-                    kw in str(row.get("site", row.get("municipality", ""))).lower()
-                    for kw in ["toronto", "ashbridges", "humber"]
-                )]
-                if t_rows:
-                    dc = next((c for c in t_rows[0] if "date" in c.lower()), None)
-                    if dc:
-                        t_rows.sort(key=lambda x: x.get(dc, ""), reverse=True)
-                    latest = t_rows[0]
-                    sc = next((c for c in latest if any(
-                        k in c.lower() for k in ["signal", "level", "activity"]
-                    )), None)
-                    return [_ok("Wastewater Virus Signal",
-                                latest.get(sc, str(latest)) if sc else str(latest),
-                                "signal level", "PHAC Wastewater Dashboard", csv_url,
-                                latest.get(dc, "unknown") if dc else "unknown",
-                                "Ashbridges Bay + Humber (~73% of Toronto population)")]
-        except requests.RequestException:
+    """
+    PHAC Wastewater Surveillance — Health Infobase API (official REST endpoint).
+    URL: health-infobase.canada.ca/api/wastewater/table/wastewater_trend
+    Returns city-level aggregate rows for Toronto (grouping == "City").
+    Four pathogens tracked: covN2 (COVID), fluA (Influenza A), fluB (Influenza B), rsv (RSV).
+
+    Fields used:
+      Location       — site/city name
+      grouping       — "City" or "Site" (we use City for aggregate)
+      measureid      — covN2 / fluA / fluB / rsv
+      Viral_Activity_Level — Non-detect / Low / Moderate / High / Very High / NA2
+      latestTrend    — Increasing / Decreasing / No Change / No Recent Data
+      weekStart      — ISO date of latest data point
+
+    Viral_Activity_Level "NA2" = no recent data — skipped.
+    Numeric scale: Non-detect=0, Low=1, Moderate=2, High=3, Very High=4
+    Alert threshold: High or Very High on any pathogen.
+    """
+    URL = "https://health-infobase.canada.ca/api/wastewater/table/wastewater_trend"
+    LEVEL_MAP = {
+        "non-detect": 0, "low": 1, "moderate": 2, "high": 3, "very high": 4
+    }
+    MEASURE_LABELS = {
+        "covN2": "COVID-19 (SARS-CoV-2)",
+        "fluA":  "Influenza A",
+        "fluB":  "Influenza B",
+        "rsv":   "RSV",
+    }
+
+    try:
+        r = SESSION.get(URL, timeout=30,
+                        headers={"Accept": "application/json",
+                                 "User-Agent": "TII-Scraper/2.10"})
+        r.raise_for_status()
+        all_rows = r.json()
+    except Exception as e:
+        return [_err("Wastewater Virus Signal", "PHAC Health Infobase API", URL, str(e))]
+
+    # Filter to Toronto city-level aggregates with current data
+    toronto_rows = [
+        row for row in all_rows
+        if row.get("city", "").lower() == "toronto"
+        and row.get("grouping") == "City"
+        and row.get("Viral_Activity_Level", "").upper() != "NA2"
+    ]
+
+    if not toronto_rows:
+        return [_err("Wastewater Virus Signal", "PHAC Health Infobase API", URL,
+                     "No current Toronto city-level rows found in API response.")]
+
+    results = []
+    for row in toronto_rows:
+        measure   = row.get("measureid", "unknown")
+        level_raw = row.get("Viral_Activity_Level", "")
+        trend     = row.get("latestTrend", "")
+        week      = row.get("weekStart", "unknown")
+        label     = MEASURE_LABELS.get(measure, measure)
+        level_key = level_raw.lower().strip()
+        level_num = LEVEL_MAP.get(level_key)
+
+        # Skip non-detect — not a meaningful signal for TII
+        if level_key == "non-detect":
             continue
-    return [_manual("Wastewater Virus Signal", "PHAC Wastewater Dashboard",
-                    "SPA — visit health-infobase.canada.ca/wastewater/ → DevTools → Network "
-                    "→ find JSON/CSV endpoint. Levels: Low / Moderate / High.",
-                    sector="health")]
+
+        if level_num is None:
+            continue
+
+        trend_note = f" Trend: {trend}." if trend and trend != "No Change" else ""
+        notes = (
+            f"Toronto wastewater surveillance — {label}. "
+            f"Signal level: {level_raw}.{trend_note} "
+            f"Week of {week}. "
+            f"Scale: Non-detect=0, Low=1, Moderate=2, High=3, Very High=4. "
+            f"Alert threshold: High or above on any pathogen. "
+            f"Source: PHAC Health Infobase API — health-infobase.canada.ca/api/wastewater"
+        )
+
+        result = _ok(
+            f"Wastewater Signal — {label}",
+            level_num,
+            level_raw,
+            "PHAC Health Infobase API (wastewater_trend)",
+            URL,
+            week,
+            notes
+        )
+        result["sector"] = "health"
+
+        # Apply threshold: alert if High (3) or Very High (4)
+        if level_num >= 3:
+            result["status"] = "alert"
+            result["threshold_note"] = f"{label} at {level_raw} in Toronto wastewater"
+        elif level_num == 2:
+            result["status"] = "warn"
+            result["threshold_note"] = f"{label} at Moderate level in Toronto wastewater"
+
+        results.append(result)
+
+    if not results:
+        return [_manual("Wastewater Virus Signal", "PHAC Health Infobase API",
+                        "API returned data but all Toronto signals were Non-detect or NA. "
+                        "Check health-infobase.canada.ca/wastewater/ for current status.",
+                        sector="health")]
+
+    return results
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2618,6 +2690,26 @@ def get_manual_placeholders():
         _manual("Port of Montreal Dwell Time", "Port of Montreal Statistics",
                 "port-montreal.com/en/operations/port-statistics → monthly PDF.",
                 sector="transport_logistics"),
+        _manual("TPS Counter-Terrorism Posture",
+                "Toronto Police Service — CTSU announcements",
+                "Manual update required. Scale: 0=CTSU established, standard intel ops; "
+                "1=Task Force Guardian active, high-visibility armed deployments at key sites; "
+                "2=Active incident response or elevated threat advisory. "
+                "Current status (Mar 24 2026): 1 — Task Force Guardian launched, armed officers "
+                "deployed at places of worship, tourist hubs, critical infrastructure. "
+                "Source: tps.ca/media-centre/news-releases/65502/ "
+                "Update when TPS issues new operational announcements.",
+                sector="public_safety"),
+        _manual("Task Force Guardian Deployments (YTD)",
+                "Toronto Police Service — Task Force Guardian",
+                "Manual update required. Count of discrete Task Force Guardian activations "
+                "year-to-date. Used for annual trend analysis — rising count = escalating or "
+                "sustained threat environment; declining count = normalization. "
+                "Current value (Mar 2026): 1 (initial deployment, Mar 24 2026). "
+                "Increment when TPS announces new or expanded deployments. "
+                "Reset to 0 each January 1. "
+                "Source: tps.ca/media-centre/",
+                sector="public_safety"),
     ]
 
 
