@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TII — Energy & Fuel: What's at Stake</title>
+<style>
+  :root {
+    --bg:       #f8f8f6;
+    --surface:  #ffffff;
+    --surface2: #f1efea;
+    --border:   rgba(0,0,0,0.10);
+    --border2:  rgba(0,0,0,0.18);
+    --text1:    #1a1a18;
+    --text2:    #5a5a56;
+    --text3:    #9a9a94;
+    --ok:       #3b6d11;
+    --ok-bg:    #eaf3de;
+    --warn:     #854f0b;
+    --warn-bg:  #faeeda;
+    --alert:    #a32d2d;
+    --alert-bg: #fcebeb;
+    --blue:     #185fa5;
+    --accent:   #c46b00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:       #1a1a18;
+      --surface:  #242422;
+      --surface2: #2e2e2c;
+      --border:   rgba(255,255,255,0.10);
+      --border2:  rgba(255,255,255,0.18);
+      --text1:    #f0efe8;
+      --text2:    #a8a8a0;
+      --text3:    #686860;
+      --ok:       #97c459;
+      --ok-bg:    #1e2e10;
+      --warn:     #ef9f27;
+      --warn-bg:  #2a1e08;
+      --alert:    #f09595;
+      --alert-bg: #2e1010;
+      --blue:     #85b7eb;
+      --accent:   #e8913a;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text1);
+    font-size: 15px;
+    line-height: 1.6;
+  }
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .topbar {
+    background: var(--surface);
+    border-bottom: 0.5px solid var(--border2);
+    padding: 0 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 52px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  .topbar-title { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+  .topbar-back { font-size: 13px; color: var(--blue); }
+
+  .hero {
+    background: linear-gradient(135deg, #1a120a 0%, #2e1e08 60%, #1a1a18 100%);
+    color: #f0efe8;
+    padding: 3rem 1.5rem 2.5rem;
+  }
+  .hero-inner { max-width: 860px; margin: 0 auto; }
+  .hero-label {
+    font-size: 11px; font-weight: 600; letter-spacing: .12em;
+    text-transform: uppercase; color: #e8913a; margin-bottom: .6rem;
+  }
+  .hero-title {
+    font-size: clamp(1.6rem, 4vw, 2.4rem);
+    font-weight: 700; line-height: 1.2; margin-bottom: 1rem;
+    letter-spacing: -.02em;
+  }
+  .hero-sub {
+    font-size: 15px; color: #b8b0a0; max-width: 620px; line-height: 1.65;
+  }
+  .hero-stats {
+    display: flex; gap: 2rem; flex-wrap: wrap;
+    margin-top: 2rem; padding-top: 1.5rem;
+    border-top: 1px solid rgba(255,255,255,0.12);
+  }
+  .hero-stat { }
+  .hero-stat-val {
+    font-size: 1.7rem; font-weight: 700; color: #e8913a; line-height: 1;
+  }
+  .hero-stat-label {
+    font-size: 11px; color: #908880; margin-top: .3rem; text-transform: uppercase;
+    letter-spacing: .06em;
+  }
+
+  .main { max-width: 860px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+
+  .section { margin-bottom: 2.5rem; }
+  .section-title {
+    font-size: 11px; font-weight: 700; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--accent);
+    margin-bottom: 1rem; padding-bottom: .4rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .chain {
+    display: flex; flex-direction: column; gap: 0;
+    margin-bottom: 1.5rem;
+  }
+  .chain-item {
+    display: flex; gap: 1rem; align-items: flex-start;
+    padding: .9rem 1rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 0;
+    position: relative;
+  }
+  .chain-item:first-child { border-radius: 8px 8px 0 0; }
+  .chain-item:last-child  { border-radius: 0 0 8px 8px; }
+  .chain-item + .chain-item { border-top: none; }
+  .chain-tier {
+    font-size: 10px; font-weight: 700; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--text3);
+    min-width: 44px; padding-top: 2px;
+  }
+  .chain-body { flex: 1; }
+  .chain-name { font-weight: 600; font-size: 14px; margin-bottom: .2rem; }
+  .chain-desc { font-size: 13px; color: var(--text2); line-height: 1.5; }
+  .chain-arrow {
+    text-align: center; color: var(--text3); font-size: 11px;
+    padding: .2rem 0; letter-spacing: .05em;
+  }
+
+  .grid-2 {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;
+  }
+  @media (max-width: 600px) { .grid-2 { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 1rem 1.1rem;
+  }
+  .card-title { font-weight: 600; font-size: 14px; margin-bottom: .4rem; }
+  .card-body { font-size: 13px; color: var(--text2); line-height: 1.55; }
+
+  .threshold-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .threshold-table th {
+    text-align: left; font-size: 11px; font-weight: 600;
+    letter-spacing: .06em; text-transform: uppercase;
+    color: var(--text3); padding: .5rem .75rem;
+    border-bottom: 1px solid var(--border2);
+  }
+  .threshold-table td {
+    padding: .65rem .75rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  .threshold-table tr:last-child td { border-bottom: none; }
+  .badge {
+    display: inline-block; font-size: 11px; font-weight: 600;
+    padding: 2px 8px; border-radius: 99px; white-space: nowrap;
+  }
+  .badge-ok     { background: var(--ok-bg);    color: var(--ok); }
+  .badge-warn   { background: var(--warn-bg);  color: var(--warn); }
+  .badge-alert  { background: var(--alert-bg); color: var(--alert); }
+
+  .callout {
+    background: var(--warn-bg); border-left: 3px solid var(--warn);
+    border-radius: 0 6px 6px 0; padding: .9rem 1.1rem;
+    font-size: 13px; color: var(--warn); line-height: 1.55;
+    margin-bottom: 1rem;
+  }
+  .callout strong { font-weight: 700; }
+
+  .timeline { display: flex; flex-direction: column; gap: .5rem; }
+  .tl-item {
+    display: flex; gap: 1rem; align-items: flex-start;
+    font-size: 13px;
+  }
+  .tl-date {
+    min-width: 80px; font-weight: 600; color: var(--text3);
+    font-size: 12px; padding-top: 1px;
+  }
+  .tl-text { color: var(--text2); line-height: 1.5; }
+
+  .footer {
+    border-top: 1px solid var(--border);
+    padding: 1rem 1.5rem;
+    font-size: 12px; color: var(--text3);
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="topbar-title">Toronto Infrastructure Intelligence</span>
+  <a class="topbar-back" href="index.html">← Live dashboard</a>
+</div>
+
+<div class="hero">
+  <div class="hero-inner">
+    <div class="hero-label">Energy Sector — Reference Profile</div>
+    <h1 class="hero-title">Fuel & Energy:<br>What's at Stake for Toronto</h1>
+    <p class="hero-sub">Toronto's fuel supply and electricity grid sit at the end of a long, international chain. Disruptions at Tier 1 — a war, a sanctions regime, a currency move — take weeks to reach the pump and months to resolve. This page explains the chain, the thresholds, and what elevated energy costs mean for the city.</p>
+    <div class="hero-stats">
+      <div class="hero-stat">
+        <div class="hero-stat-val">$95–$115</div>
+        <div class="hero-stat-label">Brent warn/alert range (Mar 2026)</div>
+      </div>
+      <div class="hero-stat">
+        <div class="hero-stat-val">~130¢/L</div>
+        <div class="hero-stat-label">Toronto pump price (Mar 25, 2026)</div>
+      </div>
+      <div class="hero-stat">
+        <div class="hero-stat-val">2–3 wks</div>
+        <div class="hero-stat-label">Crude-to-pump transmission lag</div>
+      </div>
+      <div class="hero-stat">
+        <div class="hero-stat-val">35–45¢/L</div>
+        <div class="hero-stat-label">Fixed taxes regardless of crude price</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="main">
+
+  <div class="section">
+    <div class="section-title">The supply chain — Tier 1 → 2 → 3</div>
+    <div class="chain">
+      <div class="chain-item">
+        <div class="chain-tier">Tier 1</div>
+        <div class="chain-body">
+          <div class="chain-name">Brent Crude Price (global commodity)</div>
+          <div class="chain-desc">The international benchmark for ~2/3 of globally traded oil. Set in London based on North Sea production, but priced by global supply/demand including OPEC+ decisions, Middle East conflict, sanctions, and USD strength. A $10/bbl move in Brent flows through to every barrel processed by Ontario refineries.</div>
+        </div>
+      </div>
+      <div class="chain-arrow">↓ priced in USD, converted at CAD/USD rate</div>
+      <div class="chain-item">
+        <div class="chain-tier">Tier 1</div>
+        <div class="chain-body">
+          <div class="chain-name">CAD/USD Exchange Rate</div>
+          <div class="chain-desc">Canada buys crude in US dollars. A weaker loonie amplifies every crude price increase — when CAD trades at 1.37 instead of 1.25, the same barrel costs 10% more in Canadian dollars before any processing. In early 2026, both crude prices and a weak CAD are compressing simultaneously.</div>
+        </div>
+      </div>
+      <div class="chain-arrow">↓ refined at Sarnia; distributed via TCPL/Enbridge</div>
+      <div class="chain-item">
+        <div class="chain-tier">Tier 2</div>
+        <div class="chain-body">
+          <div class="chain-name">TCPL Parkway & Enbridge Dawn (continental supply chain)</div>
+          <div class="chain-desc">Natural gas for heating and electricity generation moves from western Canada through TransCanada's Mainline to the Parkway delivery point near Milton, then into the GTA distribution network. Dawn Hub (near Sarnia) is Canada's largest underground gas storage facility at ~284 Bcf capacity — the buffer that keeps Ontario warm when pipelines run tight. Elevated pipeline utilization at Parkway is a leading indicator of GTA supply stress.</div>
+        </div>
+      </div>
+      <div class="chain-arrow">↓ dispatched by IESO; refined at Sarnia/Imperial Oil</div>
+      <div class="chain-item">
+        <div class="chain-tier">Tier 3</div>
+        <div class="chain-body">
+          <div class="chain-name">Toronto Fuel Price & IESO Generation (local delivery)</div>
+          <div class="chain-desc">The pump price Torontonians pay reflects Tier 1 + Tier 2 pressures plus fixed taxes (~35–45¢/L regardless of crude). The IESO dispatches Ontario's grid in real time — when gas peaker plants run above 3,000 MW, it signals grid stress driven by upstream energy costs. These are the indicators residents and businesses feel directly.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Current context — March 2026</div>
+    <div class="callout">
+      <strong>Threshold recalibration — March 25, 2026:</strong> The Iran war has pushed Brent above $100/bbl repeatedly since early March, peaking at $119.50 on March 20. TII's former $100 alert threshold is now the geopolitical floor. Warn threshold reset to $95/bbl; alert to $115/bbl. This is not normalization — it is an acknowledgement that the risk environment has structurally shifted.
+    </div>
+    <div class="timeline">
+      <div class="tl-item">
+        <div class="tl-date">Feb 2026</div>
+        <div class="tl-text">Brent trading ~$67–69/bbl. Iran diplomatic talks ongoing. US-India trade deal links Indian crude imports from Russia to potential halt.</div>
+      </div>
+      <div class="tl-item">
+        <div class="tl-date">Feb 28</div>
+        <div class="tl-text">Iran war escalates. Strait of Hormuz flows begin to collapse from ~20 mb/d. Brent jumps $20/bbl within days.</div>
+      </div>
+      <div class="tl-item">
+        <div class="tl-date">Mar 3</div>
+        <div class="tl-text">Toronto pump prices spike 6¢/L overnight to $1.44/L. Dan McTeague forecasts further increases. Brent briefly above $84/bbl.</div>
+      </div>
+      <div class="tl-item">
+        <div class="tl-date">Mar 9</div>
+        <div class="tl-text">EIA notes Brent at $94/bbl — up ~50% from January, highest since September 2023.</div>
+      </div>
+      <div class="tl-item">
+        <div class="tl-date">Mar 20</div>
+        <div class="tl-text">Brent peaks at $119.50/bbl following Qatar reporting "extensive damage" at world's largest LNG facility. US rules out crude export ban.</div>
+      </div>
+      <div class="tl-item">
+        <div class="tl-date">Mar 25</div>
+        <div class="tl-text">Brent eases to ~$96/bbl after US Treasury signals possible supply measures. Toronto pump ~130¢/L. TII thresholds recalibrated.</div>
+      </div>
+      <div class="tl-item">
+        <div class="tl-date">Outlook</div>
+        <div class="tl-text">EIA forecasts Brent above $95/bbl through Q2 2026, falling below $80 in Q3 if conflict resolves. Goldman Sachs has raised US recession probability amid energy and tariff headwinds.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">TII thresholds — energy indicators</div>
+    <table class="threshold-table">
+      <thead>
+        <tr>
+          <th>Indicator</th>
+          <th>Normal</th>
+          <th>Warn</th>
+          <th>Alert</th>
+          <th>Why it matters for Toronto</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Brent Crude Price</strong></td>
+          <td><span class="badge badge-ok">≤$95/bbl</span></td>
+          <td><span class="badge badge-warn">>$95/bbl</span></td>
+          <td><span class="badge badge-alert">>$115/bbl</span></td>
+          <td>Flows to pump prices in 2–3 weeks. Amplified by weak CAD.</td>
+        </tr>
+        <tr>
+          <td><strong>Fuel Price — Toronto</strong></td>
+          <td><span class="badge badge-ok">≤150¢/L</span></td>
+          <td><span class="badge badge-warn">>150¢/L</span></td>
+          <td><span class="badge badge-alert">>185¢/L</span></td>
+          <td>Direct cost to commuters, logistics, food delivery. Lower-income households spend a higher share of income on fuel.</td>
+        </tr>
+        <tr>
+          <td><strong>TCPL Parkway utilization</strong></td>
+          <td><span class="badge badge-ok">≤85%</span></td>
+          <td><span class="badge badge-warn">>85%</span></td>
+          <td><span class="badge badge-alert">>95%</span></td>
+          <td>Near-capacity = GTA gas supply stress risk. Leads pump price and heating cost increases by days to weeks.</td>
+        </tr>
+        <tr>
+          <td><strong>Dawn Hub storage</strong></td>
+          <td><span class="badge badge-ok">>150 Bcf</span></td>
+          <td><span class="badge badge-warn"><150 Bcf (winter)</span></td>
+          <td><span class="badge badge-alert"><100 Bcf</span></td>
+          <td>Ontario's winter gas buffer. Low storage entering October = supply risk if pipeline flow drops.</td>
+        </tr>
+        <tr>
+          <td><strong>Gas Output (MW)</strong></td>
+          <td><span class="badge badge-ok">≤3,000 MW</span></td>
+          <td><span class="badge badge-warn">>3,000 MW</span></td>
+          <td><span class="badge badge-alert">>5,000 MW</span></td>
+          <td>Gas peakers are marginal-cost units. High dispatch = grid stress + higher wholesale electricity prices.</td>
+        </tr>
+        <tr>
+          <td><strong>Enbridge Dawn status</strong></td>
+          <td><span class="badge badge-ok">Green (0)</span></td>
+          <td><span class="badge badge-warn">Yellow (1)</span></td>
+          <td><span class="badge badge-alert">Red (2)</span></td>
+          <td>Yellow = interruptible industrial customers impacted. Red = firm residential/commercial gas at risk.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <div class="section-title">What elevated fuel costs mean for Toronto systems</div>
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title">🚛 Logistics & food supply</div>
+        <div class="card-body">Commercial trucking accounts for ~70% of food moved into Toronto. Diesel tracks crude closely. When fuel costs rise 20%, grocery delivery margins compress — costs pass through to shelf prices within 4–8 weeks. Toronto's grocery market is highly concentrated (Loblaw, Sobeys, Metro control ~70% of sales), limiting competitive pressure to absorb increases.</div>
+      </div>
+      <div class="card">
+        <div class="card-title">🏗 Construction sector</div>
+        <div class="card-body">Heavy equipment, concrete mixing, and materials transport are fuel-intensive. With the Ontario HST rebate launching April 1, 2026 intended to stimulate 8,000 new housing starts, elevated diesel prices create a direct headwind — cost overruns on fuel reduce builder margins and can delay groundbreaking decisions.</div>
+      </div>
+      <div class="card">
+        <div class="card-title">🏠 Household heating</div>
+        <div class="card-body">~70% of Toronto households heat with natural gas. Dawn Hub storage and TCPL Parkway utilization are the upstream signals. Winter 2026–27 supply security depends on storage levels entering October — below 150 Bcf is a warning, below 100 Bcf is a crisis. Summer injection season (April–October) is the window to rebuild reserves.</div>
+      </div>
+      <div class="card">
+        <div class="card-title">🚌 Transit & emergency services</div>
+        <div class="card-body">The TTC operates ~2,000 buses, the majority diesel. Toronto EMS and Fire Services also maintain large diesel fleets. Elevated fuel costs increase operating budgets — in the context of a shelter system at 95% capacity and a new counter-terrorism unit requiring fleet deployments, energy cost pressure compounds existing budget stress at the City.</div>
+      </div>
+      <div class="card">
+        <div class="card-title">💡 Electricity prices</div>
+        <div class="card-body">Ontario's baseload is nuclear (~55%) and hydro (~25%) — both largely insulated from fuel price swings. The risk is in gas peakers, dispatched during peak demand. High gas prices raise the marginal cost of peak power, flowing into the Global Adjustment charge on commercial/industrial electricity bills. Residential bills are partially buffered by regulated pricing.</div>
+      </div>
+      <div class="card">
+        <div class="card-title">📉 Economic downstream</div>
+        <div class="card-body">Energy is embedded in nearly every cost structure. Sustained Brent above $100/bbl historically correlates with inflation re-acceleration, consumer spending pullback, and rising bankruptcy filings with a 6–12 month lag. TII's financial sector indicators — bankruptcy filings, unemployment, TRREB SNR — are the downstream signals to watch as energy stress propagates through the economy.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">The tax floor — why pump prices don't fall as fast as crude</div>
+    <p style="font-size:13px; color:var(--text2); margin-bottom:1rem; line-height:1.6;">
+      Toronto pump prices include ~35–45¢/L in fixed taxes that do not move with crude. This creates a floor: even if Brent fell to $40/bbl, Toronto pump prices would remain above 100¢/L. It also means tax policy can move the needle more immediately than market forces in either direction.
+    </p>
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title">Fixed components (~35–45¢/L total)</div>
+        <div class="card-body">
+          Federal excise tax: 10¢/L<br>
+          Ontario fuel tax: 14.7¢/L<br>
+          HST (13% on total price): ~15–18¢/L at current prices<br>
+          <em style="color:var(--text3); font-size:12px;">Note: federal carbon tax suspended April 1, 2025</em>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Variable components (crude-linked)</div>
+        <div class="card-body">
+          Crude oil cost: ~55–65% of pre-tax price<br>
+          Refinery margin: varies by season and utilization<br>
+          Wholesale rack + retailer margin: 8–12¢/L typical<br>
+          CAD/USD exchange rate: amplifies or dampens all crude moves
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="footer">
+  Toronto Infrastructure Intelligence · Energy & Fuel Reference Profile · Updated March 2026 ·
+  <a href="index.html">← Return to live dashboard</a>
+</div>
+
+</body>
+</html>
