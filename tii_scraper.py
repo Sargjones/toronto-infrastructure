@@ -1,5 +1,5 @@
 """
-Toronto Infrastructure Intelligence (TII) — Data Scraper v2.10 24 Mar 26 2008H v30-3
+Toronto Infrastructure Intelligence (TII) — Data Scraper v2.10 
 ==============================================================
 Fixes vs v1.3:
   1. IESO XML: replaced BeautifulSoup(html.parser) with xml.etree.ElementTree
@@ -1128,6 +1128,7 @@ def fetch_pearson_notams():
     URL_FAA    = "https://notams.aim.faa.gov/notamSearch/search"
 
     data = None
+    URL  = URL_NAVCAN   # safe default — updated below if a source succeeds
 
     # ── Source 1: NAV Canada CFPS ─────────────────────────────────────────────
     try:
@@ -1182,12 +1183,6 @@ def fetch_pearson_notams():
                      URL_NAVCAN,
                      "Both NAV Canada and FAA NOTAM endpoints unreachable. "
                      "Manual check: plan.navcanada.ca (CFPS) or notams.aim.faa.gov")]
-
-    # URL may not be defined if both sources returned empty without raising
-    try:
-        _active_url = URL
-    except NameError:
-        _active_url = URL_NAVCAN
 
     try:
         notams = data.get("data", [])
@@ -1297,12 +1292,13 @@ def fetch_pearson_notams():
                  f"2=Runway closure, 3=Flow control or security.")
 
         return [_ok("Pearson Airport Operations", severity, "",
-                    "NAV Canada CFPS (CYYZ NOTAMs)", _active_url,
+                    "NAV Canada CFPS (CYYZ NOTAMs)", URL,
                     str(date.today()), notes)]
 
     except Exception as e:
         return [_err("Pearson Airport Operations", "NAV Canada CFPS / FAA NOTAM",
-                     URL_NAVCAN, f"NOTAM parse error: {e}")]
+                     URL, f"NOTAM parse error: {type(e).__name__}: {e}. "
+                          f"Data keys: {list(data.keys()) if isinstance(data, dict) else type(data).__name__}")]
 
 
 def fetch_ontario_er_capacity():
