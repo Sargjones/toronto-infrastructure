@@ -222,6 +222,43 @@ def apply_thresholds(result):
 
 
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TORONTO OPEN DATA (CKAN) HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
+
+TORONTO_CKAN_BASE = "https://ckan0.cf.opendata.inter.prod-toronto.ca"
+
+def _ckan_package(package_id):
+    """Fetch a Toronto Open Data CKAN package metadata dict, or None on failure."""
+    url = f"{TORONTO_CKAN_BASE}/api/3/action/package_show"
+    try:
+        r = SESSION.get(url, params={"id": package_id}, timeout=TIMEOUT)
+        r.raise_for_status()
+        result = r.json()
+        if result.get("success"):
+            return result["result"]
+    except Exception:
+        pass
+    return None
+
+def _ckan_datastore(resource_id, limit=100, sort=""):
+    """Fetch records from a Toronto Open Data CKAN datastore resource."""
+    url = f"{TORONTO_CKAN_BASE}/api/3/action/datastore_search"
+    params = {"resource_id": resource_id, "limit": limit}
+    if sort:
+        params["sort"] = sort
+    try:
+        r = SESSION.get(url, params=params, timeout=TIMEOUT)
+        r.raise_for_status()
+        result = r.json()
+        if result.get("success"):
+            return result["result"].get("records", [])
+    except Exception:
+        pass
+    return []
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTOR: ENERGY
 # ══════════════════════════════════════════════════════════════════════════════
