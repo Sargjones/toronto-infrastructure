@@ -86,9 +86,9 @@ def _manual(indicator, source, notes, sector=None):
 THRESHOLDS = [
     # Energy
     ("Brent Crude Price",
-        lambda v: v > 80,   lambda v: v > 100,
-        "Elevated — above $80/bbl",
-        "Crisis level — above $100/bbl (Hormuz threshold)"),
+        lambda v: v > 95,   lambda v: v > 115,
+        "Elevated — above $95/bbl (geopolitical floor, Iran conflict)",
+        "Crisis level — above $115/bbl (sustained supply disruption risk)"),
     ("Gas Output (MW)",
         lambda v: v > 3000, lambda v: v > 5000,
         "Gas peakers elevated — demand stress signal",
@@ -732,7 +732,12 @@ def fetch_active_water_outages():
     for feat in features:
         props = feat.get("properties", {})
 
-        reason_code = props.get("WaterOutageEdit7b_ReasonForShut")
+        reason_code_raw = props.get("WaterOutageEdit7b_ReasonForShut")
+        # Handle both integer and string representations from GeoJSON
+        try:
+            reason_code = int(reason_code_raw) if reason_code_raw is not None else None
+        except (ValueError, TypeError):
+            reason_code = None
         reason = REASON_CODES.get(reason_code, "Unknown")
 
         if reason_code == 1:
