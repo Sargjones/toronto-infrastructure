@@ -517,7 +517,10 @@ const CARD_KNOWLEDGE = {
           "It prices approximately 2/3 of globally traded oil. WTI (West Texas Intermediate) is the North American benchmark and typically trades $2-5/bbl below Brent. " +
           "Ontario refineries (Imperial Oil Sarnia, Shell Sarnia) process a mix of western Canadian heavy crude and imported light crude. " +
           "Pump price transmission lag: a $10/bbl move in Brent takes roughly 2-3 weeks to fully appear at Ontario pumps, filtered through refinery runs, wholesale rack prices, and retailer margins. " +
-          "The CAD/USD exchange rate amplifies moves — a weaker loonie makes every barrel more expensive in Canadian dollars."
+          "The CAD/USD exchange rate amplifies moves — a weaker loonie makes every barrel more expensive in Canadian dollars. " +
+          "Current context (March 2026): The Iran war has disrupted Strait of Hormuz flows, driving Brent from ~$70/bbl in early February to a high of $119.50 on March 20. " +
+          "Thresholds recalibrated March 25, 2026 to reflect new geopolitical floor: Warn >$95/bbl, Alert >$115/bbl. " +
+          "EIA forecasts Brent to remain above $95 through Q2 2026 before easing if conflict resolves."
   },
 
   // WATER
@@ -548,18 +551,22 @@ const CARD_KNOWLEDGE = {
   },
   "shelter occupancy": {
     title: "Toronto shelter system",
-    body: "Toronto funds and operates the largest municipal shelter system in Canada, with capacity across ~70 sites for families, singles, youth, and Indigenous-specific programs. " +
+    body: "Toronto funds and operates the largest municipal shelter system in Canada across ~70+ sites for families, singles, youth, and Indigenous-specific programs. " +
           "The 4am occupancy snapshot is the standard daily measure — it captures the overnight low, after late arrivals and before morning departures. " +
-          "System capacity fluctuates with seasonal hotel conversions and modular/temporary sites. " +
-          "Occupancy above 95% is the City's threshold for declaring shelter capacity pressure and activating the Warming Centre protocol in winter. " +
-          "Demand drivers include housing unaffordability, mental health and addictions, and refugee claimant arrivals."
+          "TII tracks the core shelter programs (bed-based singles + room-based family programs) which totalled ~4,728 spaces as of March 2026. " +
+          "The City's frequently cited '~9,000 people accommodated each night' figure includes the full winter system: permanent shelters + 24-hour winter respite sites + hotels/motels for refugee claimants + warming centres + surge capacity. " +
+          "As of March 24, 2026: 8,776 total people accommodated system-wide, including 1,837 in hotel programs, 467 in 24-hour respites, and 215 in warming centres. " +
+          "Occupancy above 95% is the City's threshold for declaring shelter capacity pressure. " +
+          "Demand drivers: housing unaffordability, mental health and addictions, refugee claimant arrivals."
   },
   "shelter system capacity": {
     title: "Toronto shelter system",
-    body: "Toronto funds and operates the largest municipal shelter system in Canada, with capacity across ~70 sites for families, singles, youth, and Indigenous-specific programs. " +
-          "The 4am occupancy snapshot is the standard daily measure — it captures the overnight low, after late arrivals and before morning departures. " +
-          "System capacity fluctuates with seasonal hotel conversions and modular/temporary sites. " +
-          "Occupancy above 95% is the City's threshold for declaring shelter capacity pressure and activating the Warming Centre protocol in winter."
+    body: "Toronto funds and operates the largest municipal shelter system in Canada across ~70+ sites for families, singles, youth, and Indigenous-specific programs. " +
+          "The 4am occupancy snapshot is the standard daily measure. " +
+          "TII tracks the core shelter programs (~4,728 spaces). The City's full winter system, including hotels, respites, and warming centres, accommodated 8,776 people system-wide on March 24, 2026. " +
+          "The winter services plan (Nov 15–Apr 15) adds ~1,275 spaces annually including 490 shelter spaces, 244 warming centre spaces, and 370 supportive housing units. " +
+          "Occupancy above 95% triggers shelter capacity pressure protocols. " +
+          "Source: toronto.ca — Daily Shelter & Overnight Service Usage (updated daily)."
   },
 
   // HEALTH
@@ -1240,6 +1247,8 @@ function render(data) {
     sec.className = "sector";
     const sectorLink = sKey === "transport_logistics"
       ? ` <a href="freight-profile.html" target="_blank" rel="noopener" style="font-size:10px;font-weight:400;letter-spacing:0;text-transform:none;color:var(--blue);margin-left:8px;opacity:.8">What\u2019s at stake &rarr;</a>`
+      : sKey === "energy"
+      ? ` <a href="fuel-profile.html" target="_blank" rel="noopener" style="font-size:10px;font-weight:400;letter-spacing:0;text-transform:none;color:var(--blue);margin-left:8px;opacity:.8">What\u2019s at stake &rarr;</a>`
       : "";
     sec.innerHTML = `<div class="sector-header">${SECTOR_LABELS[sKey]||sKey}${sectorLink}</div>`;
 
