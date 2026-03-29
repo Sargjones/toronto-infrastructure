@@ -1,0 +1,24 @@
+{
+  "generated_at": "2026-03-29T08:50:39Z",
+  "count": 1,
+  "weeks": [
+    {
+      "week": "2026-W13",
+      "data_date": "2026-03-29",
+      "run_ts": "2026-03-29T08:50:39.568450Z",
+      "data_file": "tii_data_weekly_2026-W13.json",
+      "brief_file": "archive/tii_brief_2026-W13.md",
+      "brief_intro": "",
+      "totals": {
+        "ok": 34,
+        "warn": 6,
+        "alert": 1,
+        "error": 3,
+        "manual": 13
+      },
+      "alerts": [
+        "Wastewater Signal — Influenza B (3 High)"
+      ]
+    }
+  ]
+}
