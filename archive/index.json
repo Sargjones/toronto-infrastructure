@@ -1,7 +1,26 @@
 {
-  "generated_at": "2026-03-29T08:50:39Z",
-  "count": 1,
+  "generated_at": "2026-04-05T08:52:45Z",
+  "count": 2,
   "weeks": [
+    {
+      "week": "2026-W14",
+      "data_date": "2026-04-05",
+      "run_ts": "2026-04-05T08:52:45.201495Z",
+      "data_file": "tii_data_weekly_2026-W14.json",
+      "brief_file": "archive/tii_brief_2026-W14.md",
+      "brief_intro": "",
+      "totals": {
+        "ok": 36,
+        "warn": 3,
+        "alert": 2,
+        "error": 2,
+        "manual": 13
+      },
+      "alerts": [
+        "Wastewater Signal — Influenza B (3 High)",
+        "Fuel Price — Toronto (187.9 ¢/L)"
+      ]
+    },
     {
       "week": "2026-W13",
       "data_date": "2026-03-29",
