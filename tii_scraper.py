@@ -508,7 +508,7 @@ def fetch_brent_crude():
         "Ontario supply chain: Brent (Tier 1) -> TCPL pipeline utilization (Tier 2) -> "
         "Toronto pump price / IESO gas dispatch (Tier 3). "
         "CAD/USD amplifies or dampens pass-through to Ontario consumers. "
-        "Warn >$80/bbl (refinery margin pressure), Alert >$100/bbl (Hormuz disruption threshold). "
+        "Warn >$95/bbl (geopolitical floor), Alert >$115/bbl (acute supply disruption). Recalibrated W14 2026. (Hormuz disruption threshold). "
         "Source: {source}."
     )
 
