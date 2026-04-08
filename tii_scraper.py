@@ -2724,9 +2724,13 @@ def get_manual_placeholders():
                 "toronto.ca/services-payments/water-environment/water-treatment/"
                 "drinking-water-quality-monitoring-reports/",
                 sector="water"),
-        _manual("Port of Montreal Dwell Time", "Port of Montreal Statistics",
-                "port-montreal.com/en/operations/port-statistics → monthly PDF.",
-                sector="transport_logistics"),
+        _manual("Port of Montreal Container Dwell Time",
+              "Port of Montreal — Year in Review (annual PDF)",
+              "Dwell time published annually in Year in Review report. "
+              "port-montreal.com/en/trading-with-the-world-YYYY "
+              "2023 import-rail dwell: 3.7 days. No free real-time API. "
+              "TEU throughput now automated via fetch_port_of_montreal().",
+              sector="transport_logistics"),
         _manual("TPS Counter-Terrorism Posture",
                 "Toronto Police Service — CTSU announcements",
                 "Manual update required. Scale: 0=CTSU established, standard intel ops; "
@@ -2950,7 +2954,7 @@ SECTOR_SCRAPERS = {
     "food":        [fetch_statcan_cpi],
     "transport_logistics": [fetch_pearson_notams, fetch_ttc_ridership,
                              fetch_go_transit_status, fetch_via_rail_status,
-                             fetch_freight_rail_labour_risk],
+                             fetch_freight_rail_labour_risk, fetch_port_of_montreal],
     "environment": [fetch_toronto_aqhi],
     "financial":   [fetch_bank_of_canada_rate, fetch_cad_usd_rate,
                     fetch_toronto_fuel_price, fetch_toronto_unemployment,
