@@ -1320,7 +1320,7 @@ def fetch_pearson_notams():
             f"Source: AWC METAR API — aviationweather.gov/api/data/metar?ids=CYYZ"
         )
 
-         result = _ok(
+        result = _ok(
             "Pearson Weather Impact", severity, f"({flt_cat})",
             "AWC METAR API (aviationweather.gov)", AWC_METAR_URL,
             obs_time, notes,
