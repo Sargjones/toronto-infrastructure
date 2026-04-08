@@ -1325,7 +1325,6 @@ def fetch_pearson_notams():
             "AWC METAR API (aviationweather.gov)", AWC_METAR_URL,
             obs_time, notes,
         )
-        result["sector"] = "transport_logistics"
         # Apply severity thresholds manually (threshold system uses indicator name matching)
         if severity >= 3:
             result["status"] = "alert"
@@ -1533,87 +1532,76 @@ def fetch_statcan_cpi():
     """
     StatsCan CPI — Food and All-items.
 
-    v2.11 FIX: v41693271 (food-at-stores) stopped updating after Jan 2025.
-    Root cause: StatsCan basket weight update (June 2025, new 2024 reference period)
-    deprecated the old vector. The WDS API returns SUCCESS with the last known
-    data point rather than an error — causing the dashboard to show stale data
-    with a green status dot. This is a silent failure mode.
+    v2.12 FIX: Sequential per-vector requests caused GitHub Actions timeout
+    (up to 6 × 30s = 180s). Replaced with a single batched POST for all
+    vectors at once with an 8s timeout. One network round-trip instead of six.
 
-    Fix: (1) multi-vector fallback across known food CPI vectors,
-         (2) freshness validation — rejects any data point older than 120 days,
-         preventing future silent staleness regardless of which vector is active.
+    v2.11 FIX: v41693271 (food-at-stores) stale after Jan 2025 (StatsCan
+    basket weight update, June 2025). Added freshness gate (120 days) and
+    fallback vector list — the batch POST returns all; we pick the freshest.
 
-    Confirmed working:
-      v41690973 = All-items CPI, Canada (not seasonally adjusted) — current
-      v41693271 = Food-at-stores CPI — STALE after Jan 2025 (basket update)
-    Fallback candidates for food (try in order until fresh data found):
-      v41693327, v41693328, v41693329, v41693472
+    Vectors batched in single POST:
+      41693271, 41693327, 41693328, 41693329, 41693472 — food-at-stores candidates
+      41690973 — all-items CPI (confirmed working)
     """
-    WDS_URL = "https://www150.statcan.gc.ca/t1/wds/rest/getDataFromVectorsAndLatestNPeriods"
+    WDS_URL    = "https://www150.statcan.gc.ca/t1/wds/rest/getDataFromVectorsAndLatestNPeriods"
+    FOOD_VIDS  = [41693271, 41693327, 41693328, 41693329, 41693472]
+    ALLITEMS   = 41690973
+    STALE_DAYS = 120
+    ALL_VIDS   = FOOD_VIDS + [ALLITEMS]
 
-    # Food-at-stores: try multiple vectors in order.
-    # API returns SUCCESS + stale data when a vector is deprecated — DO NOT trust
-    # status alone. Always validate freshness of the ref period.
-    FOOD_VECTORS = [41693271, 41693327, 41693328, 41693329, 41693472]
-    ALL_ITEMS_VECTOR = 41690973
-    STALE_DAYS = 120   # reject data older than 4 months
+    # ── Single batched POST — all vectors at once, short timeout ─────────────
+    try:
+        r = SESSION.post(
+            WDS_URL,
+            json=[{"vectorId": vid, "latestN": 2} for vid in ALL_VIDS],
+            timeout=8,
+        )
+        r.raise_for_status()
+        raw_items = r.json()
+    except (requests.RequestException, json.JSONDecodeError) as e:
+        return [
+            _err("Grocery Price Inflation (Food CPI)", "StatsCan WDS API", WDS_URL, str(e)),
+            _err("All-items CPI (Canada)",             "StatsCan WDS API", WDS_URL, str(e)),
+        ]
 
-    def _get_vector(vid):
-        """
-        Fetch latest N=2 for a single vector.
-        Returns (value, ref_period, error_string).
-        error_string is None on success, descriptive string on any failure.
-        """
-        try:
-            r = SESSION.post(WDS_URL,
-                             json=[{"vectorId": vid, "latestN": 2}],
-                             timeout=30)
-            r.raise_for_status()
-            items = r.json()
-        except (requests.RequestException, json.JSONDecodeError) as e:
-            return None, None, str(e)
-
-        item = items[0] if items else {}
-        status = item.get("status", "FAILED")
+    # ── Parse each vector response into (vid, value, ref, age_days) ──────────
+    parsed = {}   # vid -> (value, ref, age_days)
+    for item in raw_items:
         obj = item.get("object", {})
-        if status != "SUCCESS":
-            return None, None, f"API status={status}"
-
+        vid = obj.get("vectorId")
+        if item.get("status") != "SUCCESS" or vid is None:
+            continue
         points = obj.get("vectorDataPoint", [])
         if not points:
-            return None, None, "no datapoints returned"
-
-        latest = points[-1]
+            continue
         try:
-            val = float(latest["value"])
-        except (ValueError, TypeError) as e:
-            return None, None, f"value parse error: {e}"
-
-        ref = latest.get("refPer", "unknown")
-
-        # Freshness check — the critical guard against silent staleness
-        try:
-            ref_date = datetime.fromisoformat(ref[:10])
-            age_days = (datetime.utcnow() - ref_date).days
-            if age_days > STALE_DAYS:
-                return None, None, f"stale: {age_days}d old (ref {ref}, threshold {STALE_DAYS}d)"
-        except Exception:
-            pass  # if we can't parse the date, let it through
-
-        return round(val, 1), ref, None
+            val = round(float(points[-1]["value"]), 1)
+            ref = points[-1].get("refPer", "unknown")
+            age_days = 9999
+            try:
+                age_days = (datetime.utcnow() - datetime.fromisoformat(ref[:10])).days
+            except Exception:
+                pass
+            parsed[vid] = (val, ref, age_days)
+        except (ValueError, TypeError):
+            continue
 
     results = []
 
-    # ── Food CPI: try vectors until fresh data found ──────────────────────────
+    # ── Food CPI: first fresh food vector wins ────────────────────────────────
     food_val = food_ref = food_vid = None
     food_errors = []
-    for vid in FOOD_VECTORS:
-        val, ref, err = _get_vector(vid)
-        if err:
-            food_errors.append(f"v{vid}: {err}")
+    for vid in FOOD_VIDS:
+        if vid not in parsed:
+            food_errors.append(f"v{vid}: no data")
+            continue
+        val, ref, age = parsed[vid]
+        if age > STALE_DAYS:
+            food_errors.append(f"v{vid}: stale ({age}d, ref {ref})")
             continue
         food_val, food_ref, food_vid = val, ref, vid
-        break  # first fresh result wins
+        break
 
     if food_val is not None:
         results.append(_ok(
@@ -1621,27 +1609,28 @@ def fetch_statcan_cpi():
             "CPI index (2002=100)",
             "StatsCan WDS API (Table 18-10-0004-01)", WDS_URL, food_ref,
             f"Food purchased from stores, Canada-wide, not seasonally adjusted. "
-            f"Vector v{food_vid}. Released ~6 weeks after reference month. "
-            f"Feb 2026: +4.1% YoY (StatsCan The Daily, Mar 16 2026)."))
+            f"Vector v{food_vid}. Released ~6 weeks after reference month."))
     else:
         results.append(_err(
             "Grocery Price Inflation (Food CPI)", "StatsCan WDS API", WDS_URL,
-            f"All food CPI vectors stale or failed. Tried: {'; '.join(food_errors)}. "
-            f"Manual check: www150.statcan.gc.ca/t1/tbl1/en/tv.action?pid=1810000401"))
+            f"All food vectors stale or missing. {'; '.join(food_errors)}. "
+            f"Manual: www150.statcan.gc.ca/t1/tbl1/en/tv.action?pid=1810000401"))
 
-    # ── All-items CPI: confirmed working vector ───────────────────────────────
-    val, ref, err = _get_vector(ALL_ITEMS_VECTOR)
-    if val is not None and not err:
-        results.append(_ok(
-            "All-items CPI (Canada)", val,
-            "CPI index (2002=100)",
-            "StatsCan WDS API (Table 18-10-0004-01)", WDS_URL, ref,
-            f"All-items CPI, Canada-wide, not seasonally adjusted. "
-            f"Vector v{ALL_ITEMS_VECTOR}. Released ~6 weeks after reference month."))
+    # ── All-items CPI ─────────────────────────────────────────────────────────
+    if ALLITEMS in parsed:
+        val, ref, age = parsed[ALLITEMS]
+        if age <= STALE_DAYS:
+            results.append(_ok(
+                "All-items CPI (Canada)", val, "CPI index (2002=100)",
+                "StatsCan WDS API (Table 18-10-0004-01)", WDS_URL, ref,
+                f"All-items CPI, Canada-wide, not seasonally adjusted. "
+                f"Vector v{ALLITEMS}. Released ~6 weeks after reference month."))
+        else:
+            results.append(_err("All-items CPI (Canada)", "StatsCan WDS API", WDS_URL,
+                                f"Stale: {age}d old (ref {ref})"))
     else:
-        results.append(_err(
-            "All-items CPI (Canada)", "StatsCan WDS API", WDS_URL,
-            err or "No data returned"))
+        results.append(_err("All-items CPI (Canada)", "StatsCan WDS API", WDS_URL,
+                            f"v{ALLITEMS} not returned by API"))
 
     return results
 
