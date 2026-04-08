@@ -116,11 +116,12 @@ THRESHOLDS = [
         lambda v: v > 8.0,  lambda v: v > 10.0,
         "Unemployment elevated — above 8% (high vs pre-tariff baseline)",
         "Unemployment at recession level — above 10%"),
-    # Airport operations
-    ("Pearson Airport Operations",
+    # Pearson weather impact (METAR-based, automated)
+    # Pearson Airport Operations (NOTAM manual card) never hits thresholds
+    ("Pearson Weather Impact",
         lambda v: v >= 1,  lambda v: v >= 2,
-        "Reduced capacity or approach restriction at Pearson",
-        "Runway closure or ATC flow control active at Pearson"),
+        "MVFR or worse at Pearson — weather impacting operations",
+        "IFR/LIFR at Pearson — significant weather impact, possible delays"),
     # Pipeline utilization
     ("TCPL Parkway Receipts (GTA supply)",
         lambda v: v > 85,  lambda v: v > 95,
@@ -1241,266 +1242,125 @@ def fetch_tcpl_mainline():
 
 def fetch_pearson_notams():
     """
-    Toronto Pearson (CYYZ) operational status derived from active NOTAMs.
+    Toronto Pearson (CYYZ) — weather impact (automated) + NOTAM status (manual).
 
-    v2.11: Added Source 0 — NOAA Aviation Weather Center Data API.
-    https://aviationweather.gov/api/data/notam?ids=CYYZ&format=json
-    No auth required. Worldwide coverage. Updated continuously.
-    Most reliable source from GitHub Actions (US federal open-data endpoint).
+    v2.12: Replaced failed NOTAM source chain with AWC METAR-based weather
+    impact indicator. NOTAMs have no viable free automated API for Canadian
+    airports (AWC dropped NOTAM support in Sep 2025 overhaul; NAV Canada CFPS
+    and FAA search require browser sessions). Pearson Airport Operations
+    is now a manual placeholder with clear retrieval instructions.
 
-    Sources tried in order:
-      0. NOAA AWC Data API (aviationweather.gov) — NEW, most reliable
-      1. NAV Canada CFPS API (plan.navcanada.ca)
-      2. FAA NOTAM Search API (notams.aim.faa.gov)
-      3. Legacy NAV Canada AWWS plain-text (flightplanning.navcanada.ca)
+    AUTOMATED — Pearson Weather Impact:
+      Source: AWC METAR API (aviationweather.gov/api/data/metar)
+      Confirmed working — no auth, worldwide coverage, JSON response.
+      Severity scale (FAA flight categories):
+        0 = VFR   (vis >5SM, ceiling >3000ft) — normal operations
+        1 = MVFR  (vis 3-5SM or ceiling 1000-3000ft) — minor impact
+        2 = IFR   (vis 1-3SM or ceiling 500-1000ft) — significant impact
+        3 = LIFR  (vis <1SM or ceiling <500ft) — severe impact / possible closure
 
-    Classification logic unchanged from v2.10:
-      0 = Normal operations
-      1 = Reduced capacity (approach/procedure affected)
-      2 = Runway closure
-      3 = ATC flow control or security restriction
+    MANUAL — Pearson Airport Operations (NOTAMs):
+      check: plan.navcanada.ca → Weather & NOTAM → enter CYYZ
     """
-    URL_AWC    = "https://aviationweather.gov/api/data/notam?ids=CYYZ&format=json"
-    URL_NAVCAN = "https://plan.navcanada.ca/weather/api/alpha/?site=CYYZ&alpha=notam"
-    URL_FAA    = "https://notams.aim.faa.gov/notamSearch/search"
-    URL_AWWS   = (
-        "https://flightplanning.navcanada.ca/cgi-bin/Fore-obs/"
-        "ewx_traiter_notam.cgi?Recall=ni_Aerodrome&Langue=anglais"
-        "&TypeBrief=L&Rayon=50&Station=CYYZ"
-    )
+    AWC_METAR_URL = "https://aviationweather.gov/api/data/metar?ids=CYYZ&format=json"
 
-    data = None
-    URL  = URL_AWC
+    FLTCAT_SEVERITY = {"VFR": 0, "MVFR": 1, "IFR": 2, "LIFR": 3}
+    FLTCAT_LABEL = {
+        "VFR":  "VFR — normal operations",
+        "MVFR": "MVFR — marginal conditions, possible minor delays",
+        "IFR":  "IFR — low visibility/ceiling, expect delays",
+        "LIFR": "LIFR — very low visibility/ceiling, possible closures",
+    }
 
-    # ── Source 0: NOAA AWC Data API ──────────────────────────────────────────
-    # Returns a JSON array of NOTAM objects. Each object has:
-    #   "icaoMessage" — full raw NOTAM text (ICAO format)
-    #   "startValidity", "endValidity" — ISO timestamps
-    #   "id" — NOTAM identifier
-    # No session cookie required. Reliable from automated/cloud environments.
-    # 204 = valid request, no NOTAMs active (normal operations).
+    results = []
+
+    # ── Automated: Pearson Weather Impact via AWC METAR ───────────────────────
     try:
         r = SESSION.get(
-            URL_AWC,
+            AWC_METAR_URL,
             timeout=TIMEOUT,
             headers={
-                "User-Agent": "TII-Scraper/2.11 Toronto Infrastructure Intelligence",
+                "User-Agent": "Mozilla/5.0 (compatible; TII-Scraper/2.12)",
                 "Accept": "application/json",
             },
         )
-        if r.status_code == 204:
-            data = {"data": []}
-            URL  = URL_AWC
-        elif r.status_code == 200:
-            raw = r.json()
-            if isinstance(raw, list):
-                converted = []
-                for n in raw:
-                    icao_msg = n.get("icaoMessage", n.get("rawNOTAM", ""))
-                    converted.append({
-                        "pk":            n.get("id", n.get("notamId", "")),
-                        "text":          json.dumps({"raw": icao_msg}),
-                        "startValidity": n.get("startValidity", n.get("effectiveStart", "")),
-                        "endValidity":   n.get("endValidity",   n.get("effectiveEnd",   "")),
-                    })
-                data = {"data": converted}
-                URL  = URL_AWC
-    except Exception:
-        pass
+        r.raise_for_status()
+        data = r.json()
 
-    # ── Source 1: NAV Canada CFPS ─────────────────────────────────────────────
-    if data is None:
-        try:
-            r = SESSION.get(
-                URL_NAVCAN, timeout=TIMEOUT,
-                headers={"User-Agent":  "Mozilla/5.0 TII-Scraper/2.11",
-                         "Accept":      "application/json",
-                         "Referer":     "https://plan.navcanada.ca/"})
-            r.raise_for_status()
-            candidate = r.json()
-            if isinstance(candidate.get("data"), list):
-                data = candidate
-                URL  = URL_NAVCAN
-        except Exception:
-            pass
+        if not data:
+            raise ValueError("Empty response from AWC METAR API")
 
-    # ── Source 2: FAA NOTAM Search API ───────────────────────────────────────
-    if data is None:
-        try:
-            r = SESSION.post(
-                URL_FAA,
-                json={"icaoLocation": "CYYZ", "notamType": "ALL", "radius": 0},
-                timeout=TIMEOUT,
-                headers={"User-Agent":   "Mozilla/5.0 TII-Scraper/2.11",
-                         "Content-Type": "application/json"})
-            r.raise_for_status()
-            faa = r.json()
-            notam_list = faa.get("notamList", [])
-            if notam_list:
-                converted = []
-                for n in notam_list:
-                    raw = n.get("icaoMessage", n.get("traditionalMessage", ""))
-                    converted.append({
-                        "pk":            n.get("notamNumber", ""),
-                        "text":          json.dumps({"raw": raw}),
-                        "startValidity": n.get("effectiveStart", ""),
-                        "endValidity":   n.get("effectiveEnd",   ""),
-                    })
-                data = {"data": converted}
-                URL  = URL_FAA
-        except Exception:
-            pass
+        obs = data[0]
+        flt_cat  = obs.get("fltCat", "VFR").upper().strip()
+        severity = FLTCAT_SEVERITY.get(flt_cat, 0)
+        label    = FLTCAT_LABEL.get(flt_cat, flt_cat)
+        raw_ob   = obs.get("rawOb", "")
+        temp     = obs.get("temp")
+        visib    = obs.get("visib")
+        wspd     = obs.get("wspd")
+        cover    = obs.get("cover", "")
+        obs_time = obs.get("reportTime", str(date.today()))[:10]
 
-    # ── Source 3: Legacy NAV Canada AWWS plain-text ───────────────────────────
-    if data is None:
-        try:
-            r = SESSION.get(URL_AWWS, timeout=TIMEOUT,
-                            headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.11"})
-            r.raise_for_status()
-            soup_awws = BeautifulSoup(r.text, "html.parser")
-            page_text = soup_awws.get_text("\n", strip=True)
-            notam_blocks = re.split(r'\n(?=[A-Z]\d{4}/\d{2}\s)', page_text)
-            converted = []
-            for block in notam_blocks:
-                block = block.strip()
-                if not block or len(block) < 10:
-                    continue
-                first_line = block.split("\n")[0].strip()
-                pk_match = re.match(r'([A-Z]\d{4}/\d{2})', first_line)
-                pk = pk_match.group(1) if pk_match else ""
-                converted.append({
-                    "pk":            pk,
-                    "text":          json.dumps({"raw": block}),
-                    "startValidity": "",
-                    "endValidity":   "",
-                })
-            if converted:
-                data = {"data": converted}
-                URL  = URL_AWWS
-        except Exception:
-            pass
+        # Build ceiling note from clouds array
+        clouds = obs.get("clouds", [])
+        ceiling_note = ""
+        if clouds:
+            lowest = clouds[0]
+            ceiling_note = (f" Ceiling: {lowest.get('cover','')} "
+                           f"{lowest.get('base','')}ft.")
+        elif cover == "SKC" or cover == "CLR":
+            ceiling_note = " Sky clear."
 
-    # ── No data from any source ───────────────────────────────────────────────
-    if data is None:
-        return [_manual(
-            "Pearson Airport Operations",
-            "NOAA AWC / NAV Canada CFPS / FAA NOTAM / AWWS",
-            "All four NOTAM sources unreachable. "
-            "Manual check: aviationweather.gov/data/metar/?ids=CYYZ or "
-            "plan.navcanada.ca → enter CYYZ. "
-            "Severity scale: 0=Normal, 1=Reduced capacity, "
-            "2=Runway closure, 3=Flow control or security.",
-            sector="transport_logistics")]
-
-    # ── Classification (unchanged from v2.10) ────────────────────────────────
-    try:
-        notams = data.get("data", [])
-        total  = len(notams)
-
-        parsed = []
-        for n in notams:
-            try:
-                text_obj = json.loads(n.get("text", "{}"))
-                raw = text_obj.get("raw", "")
-            except (json.JSONDecodeError, TypeError):
-                raw = str(n.get("text", ""))
-
-            q_code = ""
-            e_text = ""
-            for line in raw.splitlines():
-                line = line.strip()
-                if line.startswith("Q)"):
-                    parts = line.split("/")
-                    if len(parts) >= 2:
-                        q_code = parts[1].strip()
-                if line.startswith("E)"):
-                    e_text = line[2:].strip()
-
-            parsed.append({
-                "pk":     n.get("pk", ""),
-                "start":  n.get("startValidity", "")[:16],
-                "end":    n.get("endValidity", "")[:16],
-                "q_code": q_code,
-                "e_text": e_text,
-                "raw":    raw,
-            })
-
-        severity     = 0
-        status_label = "Normal operations"
-
-        rwy_closures = [p for p in parsed if p["q_code"] in ("QMRLC", "QMRXX")
-                        and "CLSD" in p["e_text"].upper()]
-        flow_keywords = ["FLOW", "GDP", "EDCT", "GROUND DELAY", "GROUND STOP",
-                         "TMI", "TRAFFIC MANAGEMENT", "MIT ", "MINIT"]
-        flow_notams = [p for p in parsed
-                       if any(kw in p["e_text"].upper() or kw in p["raw"].upper()
-                              for kw in flow_keywords)]
-        security_keywords = ["SECURITY", "TFR", "RESTRICTED AIRSPACE", "PROHIBITED",
-                             "MILITARY", "HOSTILE", "SHOOT DOWN", "AIR DEFENCE"]
-        security_notams = [p for p in parsed
-                           if p["q_code"] in ("QOECH", "QRTCA", "QRPCA")
-                           or any(kw in p["e_text"].upper() or kw in p["raw"].upper()
-                                  for kw in security_keywords)]
-        approach_suspended = [p for p in parsed
-                              if p["q_code"].startswith("QPI") and
-                              any(kw in p["e_text"].upper()
-                                  for kw in ["U/S", "UNSERVICEABLE", "NOT AVBL",
-                                             "SUSPENDED", "CLSD"])]
-        navaid_us = [p for p in parsed
-                     if p["q_code"] in ("QNVAS", "QILAS", "QSAAS", "QICAS")
-                     or (p["q_code"].startswith("QNV") and "U/S" in p["e_text"].upper())]
-
-        if security_notams:
-            severity = 3
-            descs = [p["e_text"][:60] for p in security_notams[:2]]
-            status_label = f"Security/airspace restriction — {'; '.join(descs)}"
-        elif flow_notams:
-            severity = 3
-            descs = [p["e_text"][:60] for p in flow_notams[:2]]
-            status_label = f"ATC flow control active — {'; '.join(descs)}"
-        elif len(rwy_closures) >= 2:
-            severity = 2
-            rwys = [p["e_text"][:40] for p in rwy_closures[:3]]
-            status_label = f"Multiple runway closures — {'; '.join(rwys)}"
-        elif len(rwy_closures) == 1:
-            severity = 2
-            status_label = f"Runway closure — {rwy_closures[0]['e_text'][:60]}"
-        elif approach_suspended:
-            severity = 1
-            status_label = f"Approach procedure affected — {approach_suspended[0]['e_text'][:60]}"
-        else:
-            severity = 0
-            status_label = "Normal operations"
-
-        source_label = {
-            URL_AWC:    "NOAA AWC Data API (aviationweather.gov)",
-            URL_NAVCAN: "NAV Canada CFPS (plan.navcanada.ca)",
-            URL_FAA:    "FAA NOTAM Search (notams.aim.faa.gov)",
-            URL_AWWS:   "NAV Canada AWWS legacy (flightplanning.navcanada.ca)",
-        }.get(URL, "NOTAM source")
-
-        notam_breakdown = (
-            f"Runway closures: {len(rwy_closures)}, "
-            f"Flow control: {len(flow_notams)}, "
-            f"Security: {len(security_notams)}, "
-            f"Approach affected: {len(approach_suspended)}, "
-            f"Navaid U/S: {len(navaid_us)}, "
-            f"Total active NOTAMs: {total}."
-        )
         notes = (
-            f"{status_label}. {notam_breakdown} "
-            f"Source: {source_label}. "
-            f"Severity scale: 0=Normal, 1=Reduced capacity, "
-            f"2=Runway closure, 3=Flow control or security."
+            f"{label}.{ceiling_note} "
+            f"Visibility: {visib}SM. Wind: {wspd}kt. Temp: {temp}°C. "
+            f"Raw: {raw_ob}. "
+            f"Scale: 0=VFR (normal), 1=MVFR (marginal), "
+            f"2=IFR (low vis/ceiling), 3=LIFR (severe). "
+            f"Source: AWC METAR API — aviationweather.gov/api/data/metar?ids=CYYZ"
         )
-        return [_ok("Pearson Airport Operations", severity, "",
-                    source_label, URL, str(date.today()), notes)]
+
+        result = _ok(
+            "Pearson Weather Impact", severity, f"({flt_cat})",
+            "AWC METAR API (aviationweather.gov)", AWC_METAR_URL,
+            obs_time, notes,
+        )
+        # Apply severity thresholds manually (threshold system uses indicator name matching)
+        if severity >= 3:
+            result["status"] = "alert"
+            result["threshold_note"] = f"LIFR conditions at Pearson — severe weather impact"
+        elif severity >= 2:
+            result["status"] = "warn"
+            result["threshold_note"] = f"IFR conditions at Pearson — low visibility/ceiling"
+        elif severity >= 1:
+            result["status"] = "warn"
+            result["threshold_note"] = f"MVFR conditions at Pearson — marginal weather"
+        results.append(result)
 
     except Exception as e:
-        return [_err("Pearson Airport Operations",
-                     "NOAA AWC / NAV Canada CFPS / FAA NOTAM",
-                     URL, f"NOTAM parse error: {type(e).__name__}: {e}. "
-                          f"Data keys: {list(data.keys()) if isinstance(data, dict) else type(data).__name__}")]
+        results.append(_err(
+            "Pearson Weather Impact",
+            "AWC METAR API (aviationweather.gov)",
+            AWC_METAR_URL,
+            f"METAR fetch failed: {e}. "
+            f"Manual: aviationweather.gov/data/metar/?ids=CYYZ",
+        ))
+
+    # ── Manual: Pearson Airport Operations (NOTAMs) ───────────────────────────
+    # No viable free automated NOTAM API exists for Canadian airports post-Sep 2025.
+    # AWC dropped NOTAM support. NAV Canada CFPS and FAA search require browser sessions.
+    results.append(_manual(
+        "Pearson Airport Operations",
+        "NAV Canada CFPS — plan.navcanada.ca",
+        "NOTAM APIs for Canadian airports require browser sessions — no free automated source. "
+        "Manual check: plan.navcanada.ca → Weather & NOTAM tab → enter CYYZ → NOTAMs. "
+        "Severity scale: 0=Normal, 1=Reduced capacity (approach U/S), "
+        "2=Runway closure, 3=Flow control or security restriction. "
+        "Also check: flightaware.com/live/airport/CYYZ for live delay status.",
+        sector="transport_logistics",
+    ))
+
+    return results
 
 def fetch_ontario_er_capacity():
     """
