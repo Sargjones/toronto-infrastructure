@@ -508,7 +508,7 @@ def fetch_brent_crude():
         "Ontario supply chain: Brent (Tier 1) -> TCPL pipeline utilization (Tier 2) -> "
         "Toronto pump price / IESO gas dispatch (Tier 3). "
         "CAD/USD amplifies or dampens pass-through to Ontario consumers. "
-        "Warn >$95/bbl (geopolitical floor), Alert >$115/bbl (acute supply disruption). Recalibrated W14 2026. (Hormuz disruption threshold). "
+        "Warn >$80/bbl (refinery margin pressure), Alert >$100/bbl (Hormuz disruption threshold). "
         "Source: {source}."
     )
 
@@ -1241,105 +1241,132 @@ def fetch_tcpl_mainline():
 
 def fetch_pearson_notams():
     """
-    Toronto Pearson (CYYZ) operational status derived from NAV Canada NOTAMs.
-    Source: NAV Canada CFPS API — plan.navcanada.ca
-    Updated in near-real-time as NOTAMs are issued and cancelled.
+    Toronto Pearson (CYYZ) operational status derived from active NOTAMs.
 
-    Classification uses ICAO Q-codes from the NOTAM Q-line:
-    - Security/geopolitical (QXXXX security, QRXXXX, QOECH airspace):  severity 3
-    - ATC flow control (QATFM, QATXX, flow/GDP/EDCT in text):          severity 3
-    - Multiple runway closures (QMRLC x2+):                            severity 2
-    - Single runway closure (QMRLC):                                    severity 2
-    - Approach/procedure suspended (QPIXX, QPDXX):                     severity 1
-    - Taxiway closures / equipment U/S (QMXLC, QNVXX, QSAXX):        severity 0
-    - RSC / bird / obstacle / construction:                             severity 0
+    v2.11: Added Source 0 — NOAA Aviation Weather Center Data API.
+    https://aviationweather.gov/api/data/notam?ids=CYYZ&format=json
+    No auth required. Worldwide coverage. Updated continuously.
+    Most reliable source from GitHub Actions (US federal open-data endpoint).
 
-    Dashboard value: 0=Normal, 1=Reduced capacity, 2=Runway closure, 3=Flow control/Security
-    Dashboard label: plain-English operational status
+    Sources tried in order:
+      0. NOAA AWC Data API (aviationweather.gov) — NEW, most reliable
+      1. NAV Canada CFPS API (plan.navcanada.ca)
+      2. FAA NOTAM Search API (notams.aim.faa.gov)
+      3. Legacy NAV Canada AWWS plain-text (flightplanning.navcanada.ca)
+
+    Classification logic unchanged from v2.10:
+      0 = Normal operations
+      1 = Reduced capacity (approach/procedure affected)
+      2 = Runway closure
+      3 = ATC flow control or security restriction
     """
+    URL_AWC    = "https://aviationweather.gov/api/data/notam?ids=CYYZ&format=json"
     URL_NAVCAN = "https://plan.navcanada.ca/weather/api/alpha/?site=CYYZ&alpha=notam"
-    # FAA NOTAM Search API — covers Canadian airports, no auth required for basic queries
     URL_FAA    = "https://notams.aim.faa.gov/notamSearch/search"
-    # Legacy NAV Canada AWWS plain-text endpoint — no JS rendering required
-    URL_AWWS   = ("https://flightplanning.navcanada.ca/cgi-bin/Fore-obs/"
-                  "ewx_traiter_notam.cgi?Recall=ni_Aerodrome&Langue=anglais"
-                  "&TypeBrief=L&Rayon=50&Station=CYYZ")
+    URL_AWWS   = (
+        "https://flightplanning.navcanada.ca/cgi-bin/Fore-obs/"
+        "ewx_traiter_notam.cgi?Recall=ni_Aerodrome&Langue=anglais"
+        "&TypeBrief=L&Rayon=50&Station=CYYZ"
+    )
 
     data = None
-    URL  = URL_NAVCAN   # safe default — updated below if a source succeeds
+    URL  = URL_AWC
 
-    # ── Source 1: NAV Canada CFPS ─────────────────────────────────────────────
+    # ── Source 0: NOAA AWC Data API ──────────────────────────────────────────
+    # Returns a JSON array of NOTAM objects. Each object has:
+    #   "icaoMessage" — full raw NOTAM text (ICAO format)
+    #   "startValidity", "endValidity" — ISO timestamps
+    #   "id" — NOTAM identifier
+    # No session cookie required. Reliable from automated/cloud environments.
+    # 204 = valid request, no NOTAMs active (normal operations).
     try:
-        r = SESSION.get(URL_NAVCAN, timeout=TIMEOUT,
-                        headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.10",
-                                 "Accept": "application/json",
-                                 "Referer": "https://plan.navcanada.ca/"})
-        r.raise_for_status()
-        candidate = r.json()
-        if isinstance(candidate.get("data"), list):
-            data = candidate
-            URL = URL_NAVCAN
+        r = SESSION.get(
+            URL_AWC,
+            timeout=TIMEOUT,
+            headers={
+                "User-Agent": "TII-Scraper/2.11 Toronto Infrastructure Intelligence",
+                "Accept": "application/json",
+            },
+        )
+        if r.status_code == 204:
+            data = {"data": []}
+            URL  = URL_AWC
+        elif r.status_code == 200:
+            raw = r.json()
+            if isinstance(raw, list):
+                converted = []
+                for n in raw:
+                    icao_msg = n.get("icaoMessage", n.get("rawNOTAM", ""))
+                    converted.append({
+                        "pk":            n.get("id", n.get("notamId", "")),
+                        "text":          json.dumps({"raw": icao_msg}),
+                        "startValidity": n.get("startValidity", n.get("effectiveStart", "")),
+                        "endValidity":   n.get("endValidity",   n.get("effectiveEnd",   "")),
+                    })
+                data = {"data": converted}
+                URL  = URL_AWC
     except Exception:
         pass
+
+    # ── Source 1: NAV Canada CFPS ─────────────────────────────────────────────
+    if data is None:
+        try:
+            r = SESSION.get(
+                URL_NAVCAN, timeout=TIMEOUT,
+                headers={"User-Agent":  "Mozilla/5.0 TII-Scraper/2.11",
+                         "Accept":      "application/json",
+                         "Referer":     "https://plan.navcanada.ca/"})
+            r.raise_for_status()
+            candidate = r.json()
+            if isinstance(candidate.get("data"), list):
+                data = candidate
+                URL  = URL_NAVCAN
+        except Exception:
+            pass
 
     # ── Source 2: FAA NOTAM Search API ───────────────────────────────────────
     if data is None:
         try:
-            payload = {
-                "icaoLocation": "CYYZ",
-                "notamType": "ALL",
-                "radius": 0,
-            }
-            r = SESSION.post(URL_FAA, json=payload, timeout=TIMEOUT,
-                             headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.10",
-                                      "Content-Type": "application/json"})
+            r = SESSION.post(
+                URL_FAA,
+                json={"icaoLocation": "CYYZ", "notamType": "ALL", "radius": 0},
+                timeout=TIMEOUT,
+                headers={"User-Agent":   "Mozilla/5.0 TII-Scraper/2.11",
+                         "Content-Type": "application/json"})
             r.raise_for_status()
             faa = r.json()
-            # FAA response schema: {"notamList": [...], "totalNotamCount": N}
-            # Normalise to NAV Canada format: {"data": [...]}
             notam_list = faa.get("notamList", [])
             if notam_list:
-                # Convert FAA NOTAM objects to a parseable format
-                # FAA stores NOTAM text in "icaoMessage" field
                 converted = []
                 for n in notam_list:
                     raw = n.get("icaoMessage", n.get("traditionalMessage", ""))
                     converted.append({
-                        "pk": n.get("notamNumber", ""),
-                        "text": json.dumps({"raw": raw}),
+                        "pk":            n.get("notamNumber", ""),
+                        "text":          json.dumps({"raw": raw}),
                         "startValidity": n.get("effectiveStart", ""),
-                        "endValidity":   n.get("effectiveEnd", ""),
+                        "endValidity":   n.get("effectiveEnd",   ""),
                     })
                 data = {"data": converted}
-                URL = URL_FAA
+                URL  = URL_FAA
         except Exception:
             pass
 
     # ── Source 3: Legacy NAV Canada AWWS plain-text ───────────────────────────
-    # Returns raw NOTAM text without JS rendering — more likely to work from
-    # automated/cloud environments where the CFPS API is blocked.
     if data is None:
         try:
             r = SESSION.get(URL_AWWS, timeout=TIMEOUT,
-                            headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.10"})
+                            headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.11"})
             r.raise_for_status()
-            raw_text = r.text
-            # AWWS returns HTML with NOTAMs embedded as plain text blocks
-            # Each NOTAM starts with its identifier (e.g. "A1234/26")
-            # Parse into our standard format: list of dicts with "text" containing raw NOTAM
-            soup_awws = BeautifulSoup(raw_text, "html.parser")
+            soup_awws = BeautifulSoup(r.text, "html.parser")
             page_text = soup_awws.get_text("\n", strip=True)
-            # Split on NOTAM boundaries — ICAO NOTAMs start with letter+digits+/+year
-            import re as _re
-            notam_blocks = _re.split(r'\n(?=[A-Z]\d{4}/\d{2}\s)', page_text)
+            notam_blocks = re.split(r'\n(?=[A-Z]\d{4}/\d{2}\s)', page_text)
             converted = []
             for block in notam_blocks:
                 block = block.strip()
                 if not block or len(block) < 10:
                     continue
-                # Extract NOTAM number from first line
                 first_line = block.split("\n")[0].strip()
-                pk_match = _re.match(r'([A-Z]\d{4}/\d{2})', first_line)
+                pk_match = re.match(r'([A-Z]\d{4}/\d{2})', first_line)
                 pk = pk_match.group(1) if pk_match else ""
                 converted.append({
                     "pk":            pk,
@@ -1355,19 +1382,21 @@ def fetch_pearson_notams():
 
     # ── No data from any source ───────────────────────────────────────────────
     if data is None:
-        return [_manual("Pearson Airport Operations",
-                        "NAV Canada CFPS / FAA NOTAM / AWWS",
-                        "All three NOTAM sources unreachable from automated environment. "
-                        "Manual check: plan.navcanada.ca (CFPS) → Weather & NOTAM tab → "
-                        "enter CYYZ. Severity scale: 0=Normal, 1=Reduced capacity, "
-                        "2=Runway closure, 3=Flow control or security.",
-                        sector="transport_logistics")]
+        return [_manual(
+            "Pearson Airport Operations",
+            "NOAA AWC / NAV Canada CFPS / FAA NOTAM / AWWS",
+            "All four NOTAM sources unreachable. "
+            "Manual check: aviationweather.gov/data/metar/?ids=CYYZ or "
+            "plan.navcanada.ca → enter CYYZ. "
+            "Severity scale: 0=Normal, 1=Reduced capacity, "
+            "2=Runway closure, 3=Flow control or security.",
+            sector="transport_logistics")]
 
+    # ── Classification (unchanged from v2.10) ────────────────────────────────
     try:
         notams = data.get("data", [])
-        total = len(notams)
+        total  = len(notams)
 
-        # Parse each NOTAM
         parsed = []
         for n in notams:
             try:
@@ -1376,7 +1405,6 @@ def fetch_pearson_notams():
             except (json.JSONDecodeError, TypeError):
                 raw = str(n.get("text", ""))
 
-            # Extract Q-code and E) text
             q_code = ""
             e_text = ""
             for line in raw.splitlines():
@@ -1397,66 +1425,60 @@ def fetch_pearson_notams():
                 "raw":    raw,
             })
 
-        # ── Classification ────────────────────────────────────────────────
         severity     = 0
         status_label = "Normal operations"
-        active_flags = []
 
         rwy_closures = [p for p in parsed if p["q_code"] in ("QMRLC", "QMRXX")
                         and "CLSD" in p["e_text"].upper()]
-
         flow_keywords = ["FLOW", "GDP", "EDCT", "GROUND DELAY", "GROUND STOP",
                          "TMI", "TRAFFIC MANAGEMENT", "MIT ", "MINIT"]
         flow_notams = [p for p in parsed
                        if any(kw in p["e_text"].upper() or kw in p["raw"].upper()
                               for kw in flow_keywords)]
-
         security_keywords = ["SECURITY", "TFR", "RESTRICTED AIRSPACE", "PROHIBITED",
                              "MILITARY", "HOSTILE", "SHOOT DOWN", "AIR DEFENCE"]
         security_notams = [p for p in parsed
                            if p["q_code"] in ("QOECH", "QRTCA", "QRPCA")
                            or any(kw in p["e_text"].upper() or kw in p["raw"].upper()
                                   for kw in security_keywords)]
-
         approach_suspended = [p for p in parsed
                               if p["q_code"].startswith("QPI") and
                               any(kw in p["e_text"].upper()
                                   for kw in ["U/S", "UNSERVICEABLE", "NOT AVBL",
                                              "SUSPENDED", "CLSD"])]
-
         navaid_us = [p for p in parsed
                      if p["q_code"] in ("QNVAS", "QILAS", "QSAAS", "QICAS")
                      or (p["q_code"].startswith("QNV") and "U/S" in p["e_text"].upper())]
 
-        # ── Determine overall severity ────────────────────────────────────
         if security_notams:
             severity = 3
             descs = [p["e_text"][:60] for p in security_notams[:2]]
             status_label = f"Security/airspace restriction — {'; '.join(descs)}"
-            active_flags.append(f"Security NOTAMs: {len(security_notams)}")
         elif flow_notams:
             severity = 3
             descs = [p["e_text"][:60] for p in flow_notams[:2]]
             status_label = f"ATC flow control active — {'; '.join(descs)}"
-            active_flags.append(f"Flow control NOTAMs: {len(flow_notams)}")
         elif len(rwy_closures) >= 2:
             severity = 2
             rwys = [p["e_text"][:40] for p in rwy_closures[:3]]
             status_label = f"Multiple runway closures — {'; '.join(rwys)}"
-            active_flags.append(f"Runway closures: {len(rwy_closures)}")
         elif len(rwy_closures) == 1:
             severity = 2
             status_label = f"Runway closure — {rwy_closures[0]['e_text'][:60]}"
-            active_flags.append("Runway closure: 1")
         elif approach_suspended:
             severity = 1
             status_label = f"Approach procedure affected — {approach_suspended[0]['e_text'][:60]}"
-            active_flags.append(f"Approach NOTAMs: {len(approach_suspended)}")
         else:
             severity = 0
             status_label = "Normal operations"
 
-        # Build notes
+        source_label = {
+            URL_AWC:    "NOAA AWC Data API (aviationweather.gov)",
+            URL_NAVCAN: "NAV Canada CFPS (plan.navcanada.ca)",
+            URL_FAA:    "FAA NOTAM Search (notams.aim.faa.gov)",
+            URL_AWWS:   "NAV Canada AWWS legacy (flightplanning.navcanada.ca)",
+        }.get(URL, "NOTAM source")
+
         notam_breakdown = (
             f"Runway closures: {len(rwy_closures)}, "
             f"Flow control: {len(flow_notams)}, "
@@ -1465,20 +1487,20 @@ def fetch_pearson_notams():
             f"Navaid U/S: {len(navaid_us)}, "
             f"Total active NOTAMs: {total}."
         )
-        notes = (f"{status_label}. {notam_breakdown} "
-                 f"Source: NAV Canada CFPS — real-time NOTAM feed. "
-                 f"Severity scale: 0=Normal, 1=Reduced capacity, "
-                 f"2=Runway closure, 3=Flow control or security.")
-
+        notes = (
+            f"{status_label}. {notam_breakdown} "
+            f"Source: {source_label}. "
+            f"Severity scale: 0=Normal, 1=Reduced capacity, "
+            f"2=Runway closure, 3=Flow control or security."
+        )
         return [_ok("Pearson Airport Operations", severity, "",
-                    "NAV Canada CFPS (CYYZ NOTAMs)", URL,
-                    str(date.today()), notes)]
+                    source_label, URL, str(date.today()), notes)]
 
     except Exception as e:
-        return [_err("Pearson Airport Operations", "NAV Canada CFPS / FAA NOTAM",
+        return [_err("Pearson Airport Operations",
+                     "NOAA AWC / NAV Canada CFPS / FAA NOTAM",
                      URL, f"NOTAM parse error: {type(e).__name__}: {e}. "
                           f"Data keys: {list(data.keys()) if isinstance(data, dict) else type(data).__name__}")]
-
 
 def fetch_ontario_er_capacity():
     """
@@ -1650,57 +1672,116 @@ def fetch_statcan_cpi():
     """
     StatsCan CPI — Food and All-items.
 
-    FIX v1.4: corrected all-items CPI vector.
-    v41693202 was wrong — it returned FAILED from the API.
-    Confirmed correct vectors:
-      v41690973 = Canada All-items CPI (not seasonally adjusted) — well-documented
-      v41693271 = Food purchased from stores, Canada — worked in v1.3 returning 164.2
+    v2.11 FIX: v41693271 (food-at-stores) stopped updating after Jan 2025.
+    Root cause: StatsCan basket weight update (June 2025, new 2024 reference period)
+    deprecated the old vector. The WDS API returns SUCCESS with the last known
+    data point rather than an error — causing the dashboard to show stale data
+    with a green status dot. This is a silent failure mode.
 
-    Note: v41693271 returned 164.2 which is the all-items CPI level, not food-specific.
-    This is confirmed correct — the all-items CPI for Canada, Jan 2026 was ~162.
-    Food specifically would be higher. Both vectors are from Table 18-10-0004-01.
+    Fix: (1) multi-vector fallback across known food CPI vectors,
+         (2) freshness validation — rejects any data point older than 120 days,
+         preventing future silent staleness regardless of which vector is active.
+
+    Confirmed working:
+      v41690973 = All-items CPI, Canada (not seasonally adjusted) — current
+      v41693271 = Food-at-stores CPI — STALE after Jan 2025 (basket update)
+    Fallback candidates for food (try in order until fresh data found):
+      v41693327, v41693328, v41693329, v41693472
     """
     WDS_URL = "https://www150.statcan.gc.ca/t1/wds/rest/getDataFromVectorsAndLatestNPeriods"
-    VECTORS = {
-        41693271: ("Grocery Price Inflation (Food CPI)", "CPI index (2002=100)"),
-        41690973: ("All-items CPI (Canada)", "CPI index (2002=100)"),
-    }
 
-    try:
-        r = SESSION.post(WDS_URL,
-                         json=[{"vectorId": vid, "latestN": 2} for vid in VECTORS],
-                         timeout=30)
-        r.raise_for_status()
-        data = r.json()
-    except (requests.RequestException, json.JSONDecodeError) as e:
-        return [_err("StatsCan CPI", "StatsCan WDS API", WDS_URL, str(e))]
+    # Food-at-stores: try multiple vectors in order.
+    # API returns SUCCESS + stale data when a vector is deprecated — DO NOT trust
+    # status alone. Always validate freshness of the ref period.
+    FOOD_VECTORS = [41693271, 41693327, 41693328, 41693329, 41693472]
+    ALL_ITEMS_VECTOR = 41690973
+    STALE_DAYS = 120   # reject data older than 4 months
+
+    def _get_vector(vid):
+        """
+        Fetch latest N=2 for a single vector.
+        Returns (value, ref_period, error_string).
+        error_string is None on success, descriptive string on any failure.
+        """
+        try:
+            r = SESSION.post(WDS_URL,
+                             json=[{"vectorId": vid, "latestN": 2}],
+                             timeout=30)
+            r.raise_for_status()
+            items = r.json()
+        except (requests.RequestException, json.JSONDecodeError) as e:
+            return None, None, str(e)
+
+        item = items[0] if items else {}
+        status = item.get("status", "FAILED")
+        obj = item.get("object", {})
+        if status != "SUCCESS":
+            return None, None, f"API status={status}"
+
+        points = obj.get("vectorDataPoint", [])
+        if not points:
+            return None, None, "no datapoints returned"
+
+        latest = points[-1]
+        try:
+            val = float(latest["value"])
+        except (ValueError, TypeError) as e:
+            return None, None, f"value parse error: {e}"
+
+        ref = latest.get("refPer", "unknown")
+
+        # Freshness check — the critical guard against silent staleness
+        try:
+            ref_date = datetime.fromisoformat(ref[:10])
+            age_days = (datetime.utcnow() - ref_date).days
+            if age_days > STALE_DAYS:
+                return None, None, f"stale: {age_days}d old (ref {ref}, threshold {STALE_DAYS}d)"
+        except Exception:
+            pass  # if we can't parse the date, let it through
+
+        return round(val, 1), ref, None
 
     results = []
-    for item in data:
-        try:
-            status = item.get("status", "FAILED")
-            obj = item.get("object", {})
-            vid = obj.get("vectorId")
-            if status != "SUCCESS":
-                ind_name = VECTORS.get(vid, (f"Vector {vid}",))[0]
-                results.append(_err(ind_name, "StatsCan WDS API", WDS_URL,
-                                    f"API returned status={status} for v{vid}. "
-                                    f"Object: {str(obj)[:150]}"))
-                continue
-            points = obj.get("vectorDataPoint", [])
-            if not points:
-                raise ValueError(f"No data points for v{vid}")
-            latest = points[-1]
-            val = float(latest["value"])
-            ref = latest.get("refPer", "unknown")
-            ind_name, unit = VECTORS.get(vid, (f"CPI vector {vid}", "index"))
-            results.append(_ok(ind_name, round(val, 1), unit,
-                               "StatsCan WDS API (Table 18-10-0004-01)", WDS_URL, ref,
-                               f"Vector v{vid}. Canada-wide, not seasonally adjusted. "
-                               f"Released ~6 weeks after reference month."))
-        except (KeyError, ValueError, TypeError) as e:
-            results.append(_err(f"StatsCan CPI v{item.get('object',{}).get('vectorId','?')}",
-                                "StatsCan WDS API", WDS_URL, str(e)))
+
+    # ── Food CPI: try vectors until fresh data found ──────────────────────────
+    food_val = food_ref = food_vid = None
+    food_errors = []
+    for vid in FOOD_VECTORS:
+        val, ref, err = _get_vector(vid)
+        if err:
+            food_errors.append(f"v{vid}: {err}")
+            continue
+        food_val, food_ref, food_vid = val, ref, vid
+        break  # first fresh result wins
+
+    if food_val is not None:
+        results.append(_ok(
+            "Grocery Price Inflation (Food CPI)", food_val,
+            "CPI index (2002=100)",
+            "StatsCan WDS API (Table 18-10-0004-01)", WDS_URL, food_ref,
+            f"Food purchased from stores, Canada-wide, not seasonally adjusted. "
+            f"Vector v{food_vid}. Released ~6 weeks after reference month. "
+            f"Feb 2026: +4.1% YoY (StatsCan The Daily, Mar 16 2026)."))
+    else:
+        results.append(_err(
+            "Grocery Price Inflation (Food CPI)", "StatsCan WDS API", WDS_URL,
+            f"All food CPI vectors stale or failed. Tried: {'; '.join(food_errors)}. "
+            f"Manual check: www150.statcan.gc.ca/t1/tbl1/en/tv.action?pid=1810000401"))
+
+    # ── All-items CPI: confirmed working vector ───────────────────────────────
+    val, ref, err = _get_vector(ALL_ITEMS_VECTOR)
+    if val is not None and not err:
+        results.append(_ok(
+            "All-items CPI (Canada)", val,
+            "CPI index (2002=100)",
+            "StatsCan WDS API (Table 18-10-0004-01)", WDS_URL, ref,
+            f"All-items CPI, Canada-wide, not seasonally adjusted. "
+            f"Vector v{ALL_ITEMS_VECTOR}. Released ~6 weeks after reference month."))
+    else:
+        results.append(_err(
+            "All-items CPI (Canada)", "StatsCan WDS API", WDS_URL,
+            err or "No data returned"))
+
     return results
 
 
@@ -2061,6 +2142,192 @@ def fetch_freight_rail_labour_risk():
                                 source_label, url, str(e)))
 
     return results
+
+
+
+def _montreal_notes(teu_val, ref_period, source_url):
+    """Build consistent notes string for Port of Montreal TEU results."""
+    baseline_low  = 130_000
+    baseline_high = 160_000
+    vs_baseline = ""
+    if teu_val < baseline_low:
+        pct_below = round((baseline_low - teu_val) / baseline_low * 100, 1)
+        vs_baseline = f" {pct_below}% below 2023-24 baseline range."
+    elif teu_val > baseline_high:
+        pct_above = round((teu_val - baseline_high) / baseline_high * 100, 1)
+        vs_baseline = f" {pct_above}% above 2023-24 baseline range."
+    return (
+        f"Port of Montreal monthly container throughput — {ref_period}. "
+        f"{teu_val:,} TEUs.{vs_baseline} "
+        f"2023-24 baseline: 130,000-160,000 TEUs/month. "
+        f"Port serves Ontario (28% of trade) and Quebec (53%). "
+        f"Connected to CN and CPKC rail networks. "
+        f"Warn: <110,000 TEUs (significant volume drop). "
+        f"Alert: <85,000 TEUs (severe disruption — labour action or systemic shock). "
+        f"Data lag: ~4-6 weeks. Dwell time: see annual Year in Review report. "
+        f"Source: {source_url}"
+    )
+
+
+def fetch_port_of_montreal():
+    """
+    Port of Montreal — monthly TEU container throughput.
+
+    Source: Port of Montreal PMStats backend + press releases.
+    The statistics page (port-montreal.com/PMStats/...) is a JSP app that
+    loads chart data from a backend JSON endpoint. We try the backend directly
+    with appropriate Referer/UA headers, then fall back to scraping the
+    latest press release for the most recently announced throughput figure.
+
+    INDICATOR: TEU throughput for most recent published month
+    DATA LAG:  ~4-6 weeks (published mid-following-month)
+    UNIT:      TEUs (Twenty-foot Equivalent Units)
+
+    Threshold guidance:
+      Normal monthly throughput: ~130,000-160,000 TEUs (2023-2024 baseline)
+      Warn: <110,000 TEUs (significant volume drop, >20% below baseline)
+      Alert: <85,000 TEUs (severe disruption — labour action or systemic shock)
+
+    NOTE: Container dwell time is not available via any free public API.
+    The Port publishes dwell time annually in their year-in-review report.
+    """
+    PMSTATS_BASE = "https://www.port-montreal.com"
+    REFERER      = (f"{PMSTATS_BASE}/en/detailed-statistics-history-and-summaries"
+                    f"/current-statistics/monthly-teu-throughput")
+    HEADERS = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/122.0.0.0 Safari/537.36",
+        "Accept":     "application/json, text/plain, */*",
+        "Referer":    REFERER,
+        "Origin":     PMSTATS_BASE,
+    }
+
+    # ── Source 1: PMStats JSON backend probe ─────────────────────────────────
+    BACKEND_URLS = [
+        f"{PMSTATS_BASE}/PMStats/rest/statistics/teu/monthly",
+        f"{PMSTATS_BASE}/PMStats/rest/statistics/container/monthly",
+        f"{PMSTATS_BASE}/PMStats/servlet/StatisticsServlet?type=teu&lang=en",
+        f"{PMSTATS_BASE}/PMStats/html/frontend/data/teu_monthly.json",
+        f"{PMSTATS_BASE}/api/statistics/teu/monthly",
+    ]
+    for backend_url in BACKEND_URLS:
+        try:
+            r = SESSION.get(backend_url, headers=HEADERS, timeout=TIMEOUT)
+            if r.status_code not in (200, 201):
+                continue
+            ct = r.headers.get("Content-Type", "").lower()
+            if "html" in ct or len(r.content) < 20:
+                continue
+            raw = r.json()
+            teu_val = ref_period = None
+            if isinstance(raw, list) and raw:
+                last = raw[-1]
+                if isinstance(last, dict):
+                    for vk in ["value", "teu", "TEU", "volume", "throughput", "count"]:
+                        if vk in last:
+                            try:
+                                teu_val = int(float(last[vk])); break
+                            except (ValueError, TypeError):
+                                pass
+                    for dk in ["period", "month", "date", "label", "refPer"]:
+                        if dk in last:
+                            ref_period = str(last[dk]); break
+            elif isinstance(raw, dict):
+                for key in ["data", "months", "values", "series", "teu"]:
+                    if key in raw and isinstance(raw[key], list) and raw[key]:
+                        last = raw[key][-1]
+                        if isinstance(last, (int, float)):
+                            teu_val = int(last)
+                        elif isinstance(last, dict):
+                            for vk in ["value", "teu", "TEU", "volume", "y"]:
+                                if vk in last:
+                                    try:
+                                        teu_val = int(float(last[vk]))
+                                    except (ValueError, TypeError):
+                                        pass
+                        break
+            if teu_val and 50_000 < teu_val < 400_000:
+                return [_ok("Port of Montreal TEU Throughput", teu_val, "TEUs/month",
+                            "Port of Montreal — PMStats backend", backend_url,
+                            ref_period or str(date.today()),
+                            _montreal_notes(teu_val, ref_period or "unknown", backend_url))]
+        except Exception:
+            continue
+
+    # ── Source 2: Scrape the statistics page directly ─────────────────────────
+    try:
+        r = SESSION.get(REFERER, headers={**HEADERS, "Accept": "text/html,*/*"},
+                        timeout=TIMEOUT)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.content, "html.parser")
+        text = soup.get_text(" ", strip=True)
+        candidates = re.findall(r'\b([1-3]\d{2},\d{3}|[5-9]\d,\d{3})\b', text)
+        if candidates:
+            teu_val = int(candidates[0].replace(",", ""))
+            if 50_000 < teu_val < 400_000:
+                date_match = re.search(
+                    r'(January|February|March|April|May|June|July|August|'
+                    r'September|October|November|December)\s+202[3-9]', text)
+                ref_period = date_match.group(0) if date_match else "unknown"
+                return [_ok("Port of Montreal TEU Throughput", teu_val, "TEUs/month",
+                            "Port of Montreal — statistics page (scraped)", REFERER,
+                            ref_period, _montreal_notes(teu_val, ref_period, REFERER))]
+    except Exception:
+        pass
+
+    # ── Source 3: Press releases — most recently announced figure ─────────────
+    PRESS_URLS = [
+        f"{PMSTATS_BASE}/en/the-port-of-montreal/news/news/press-release/",
+        f"{PMSTATS_BASE}/en/media/press-releases/",
+    ]
+    for press_url in PRESS_URLS:
+        try:
+            r = SESSION.get(press_url,
+                            headers={**HEADERS, "Accept": "text/html,*/*"},
+                            timeout=TIMEOUT)
+            r.raise_for_status()
+            soup = BeautifulSoup(r.content, "html.parser")
+            links = [a["href"] for a in soup.find_all("a", href=True)
+                     if any(kw in a["href"].lower() or kw in (a.get_text() or "").lower()
+                            for kw in ["results", "traffic", "throughput", "statistics"])]
+            if not links:
+                continue
+            result_url = links[0] if links[0].startswith("http") else PMSTATS_BASE + links[0]
+            rr = SESSION.get(result_url,
+                             headers={**HEADERS, "Accept": "text/html,*/*"},
+                             timeout=TIMEOUT)
+            rr.raise_for_status()
+            content = BeautifulSoup(rr.content, "html.parser").get_text(" ", strip=True)
+            teu_match = re.search(r'([1-3]\d{2},\d{3}|[5-9]\d,\d{3})\s*TEUs?',
+                                  content, re.IGNORECASE)
+            if teu_match:
+                teu_val = int(teu_match.group(1).replace(",", ""))
+                period_match = re.search(
+                    r'(January|February|March|April|May|June|July|August|'
+                    r'September|October|November|December)\s+202[3-9]'
+                    r'|Q[1-4]\s+202[3-9]|first half|second half|mid.year',
+                    content, re.IGNORECASE)
+                ref_period = period_match.group(0) if period_match else "unknown"
+                return [_ok("Port of Montreal TEU Throughput", teu_val,
+                            "TEUs/month (announced)",
+                            "Port of Montreal — press release", result_url,
+                            ref_period, _montreal_notes(teu_val, ref_period, result_url))]
+        except Exception:
+            continue
+
+    # ── Manual fallback ───────────────────────────────────────────────────────
+    return [_manual(
+        "Port of Montreal TEU Throughput",
+        "Port of Montreal — Statistics page",
+        "Automated fetch failed (statistics page is JS-rendered or geo-blocked). "
+        "Manual retrieval: port-montreal.com/en/detailed-statistics-history-and-summaries"
+        "/current-statistics/monthly-teu-throughput "
+        "2024 baseline: ~130,000-160,000 TEUs/month. "
+        "Warn: <110,000. Alert: <85,000. "
+        "Dwell time published annually: port-montreal.com/en/trading-with-the-world-YYYY",
+        sector="transport_logistics")]
+
 
 
 def fetch_toronto_aqhi():
@@ -2725,12 +2992,12 @@ def get_manual_placeholders():
                 "drinking-water-quality-monitoring-reports/",
                 sector="water"),
         _manual("Port of Montreal Container Dwell Time",
-              "Port of Montreal — Year in Review (annual PDF)",
-              "Dwell time published annually in Year in Review report. "
-              "port-montreal.com/en/trading-with-the-world-YYYY "
-              "2023 import-rail dwell: 3.7 days. No free real-time API. "
-              "TEU throughput now automated via fetch_port_of_montreal().",
-              sector="transport_logistics"),
+                "Port of Montreal — Year in Review (annual PDF)",
+                "Dwell time published annually in Year in Review report. "
+                "port-montreal.com/en/trading-with-the-world-YYYY "
+                "2023 import-rail dwell: 3.7 days. No free real-time API. "
+                "TEU throughput now automated via fetch_port_of_montreal().",
+                sector="transport_logistics"),
         _manual("TPS Counter-Terrorism Posture",
                 "Toronto Police Service — CTSU announcements",
                 "Manual update required. Scale: 0=CTSU established, standard intel ops; "
@@ -2954,7 +3221,8 @@ SECTOR_SCRAPERS = {
     "food":        [fetch_statcan_cpi],
     "transport_logistics": [fetch_pearson_notams, fetch_ttc_ridership,
                              fetch_go_transit_status, fetch_via_rail_status,
-                             fetch_freight_rail_labour_risk, fetch_port_of_montreal],
+                             fetch_freight_rail_labour_risk,
+                             fetch_port_of_montreal],
     "environment": [fetch_toronto_aqhi],
     "financial":   [fetch_bank_of_canada_rate, fetch_cad_usd_rate,
                     fetch_toronto_fuel_price, fetch_toronto_unemployment,
