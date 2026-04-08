@@ -1320,11 +1320,12 @@ def fetch_pearson_notams():
             f"Source: AWC METAR API — aviationweather.gov/api/data/metar?ids=CYYZ"
         )
 
-        result = _ok(
+         result = _ok(
             "Pearson Weather Impact", severity, f"({flt_cat})",
             "AWC METAR API (aviationweather.gov)", AWC_METAR_URL,
             obs_time, notes,
         )
+        result["sector"] = "transport_logistics"
         # Apply severity thresholds manually (threshold system uses indicator name matching)
         if severity >= 3:
             result["status"] = "alert"
