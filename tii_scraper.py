@@ -1759,219 +1759,183 @@ def fetch_ttc_service_status():
     """
     TTC Subway Service Status — real-time disruption detection.
 
-    Strategy (multi-source with graceful fallback):
-      1. GTFS-RT Service Alerts feed (bustime.ttc.ca/gtfsrt/alerts)
-         — protobuf format; requires `pip install gtfs-realtime-bindings`
-         — most reliable, machine-readable, updated every 30s
-      2. TTC Service Advisories API (ttc.ca/api/StatusDataService/ServiceAlert)
-         — JSON; undocumented but stable internal endpoint
-      3. TTC Service Advisories HTML page (ttc.ca/service-advisories)
-         — scraped fallback if API is unavailable
+    PRIMARY SOURCE: alerts.ttc.ca/api/alerts/live-alerts
+      — Official TTC alerts JSON API (the same backend the ttc.ca website reads).
+      — Returns structured records with fields: routeType, effect, severity,
+        alertType, title, headerText, shuttleType, cause, activePeriod.
+      — No JS rendering required. Confirmed live as of 2026-04-10.
+
+    FALLBACK: bustime.ttc.ca/gtfsrt/alerts (GTFS-RT protobuf)
+      — Requires `pip install gtfs-realtime-bindings`; silently skipped if absent.
 
     Returns:
       - TTC Subway Service Status: 0=normal, 1=partial disruption, 2=major disruption
-      - TTC Active Service Alerts: count of current disruption advisories
+      - TTC Active Service Alerts: count of active Unplanned subway alerts
 
-    Status mapping:
-      ok   = 0 (normal service on all lines)
-      warn = 1 (partial suspension, single station/segment, or minor delays)
-      alert = 2 (full line suspension or multi-segment major disruption)
+    Status logic (effect field, subway routes only):
+      alert (2) = any Unplanned alert with effect NO_SERVICE
+                  OR 2+ subway segments with Critical severity
+      warn  (1) = any Unplanned alert with effect REDUCED_SERVICE / SIGNIFICANT_DELAYS
+                  OR any Planned alert with effect NO_SERVICE (advance notice, not crisis)
+                  OR shuttleType = "Running" on any subway route
+      ok    (0) = no active subway alerts, or only elevator/escalator notices
 
-    Threshold-free: status is set directly from disruption severity — no numeric threshold.
+    Note: Planned track closures (alertType="Planned") are common weekend maintenance.
+    Unplanned closures (alertType="Unplanned") are the signal to escalate to alert.
 
     Lines monitored: Line 1 (Yonge-University), Line 2 (Bloor-Danforth),
                      Line 3 (Scarborough), Line 4 (Sheppard).
-
-    TTC carries ~1.7M riders/week — a Line 1 or Line 2 full suspension is a
+    TTC carries ~1.7M riders/week — an unplanned Line 1/2 suspension is a
     Tier-1 urban mobility event cascading into surface congestion and GO overcrowding.
     """
-    GTFS_RT_URL = "https://bustime.ttc.ca/gtfsrt/alerts"
-    API_URL     = "https://www.ttc.ca/api/StatusDataService/ServiceAlert"
-    HTML_URL    = "https://www.ttc.ca/service-advisories"
+    LIVE_ALERTS_URL = "https://alerts.ttc.ca/api/alerts/live-alerts"
+    GTFS_RT_URL     = "https://bustime.ttc.ca/gtfsrt/alerts"
+    DISPLAY_URL     = "https://www.ttc.ca/service-advisories/all-service-alerts"
+    SOURCE_LABEL    = "TTC — alerts.ttc.ca/api/alerts/live-alerts"
 
-    SOURCE_LABEL = "TTC — ttc.ca/service-advisories"
+    # ── Source 1: alerts.ttc.ca JSON API ──────────────────────────────────────
+    try:
+        r = SESSION.get(LIVE_ALERTS_URL, timeout=TIMEOUT,
+                        headers={"Accept": "application/json",
+                                 "Referer": "https://www.ttc.ca/"})
+        r.raise_for_status()
+        data = r.json()
 
-    # Keywords indicating full suspension (→ alert)
-    SUSPENSION_KEYWORDS = [
-        "no service", "suspended", "suspension", "shut down", "shutdown",
-        "closed", "closure", "out of service", "not operating",
-    ]
-    # Keywords indicating partial disruption (→ warn)
-    DISRUPTION_KEYWORDS = [
-        "delay", "delays", "reduced speed", "shuttle bus", "shuttle buses",
-        "diversion", "bypassing", "bypassed", "not stopping",
-        "single track", "single-track", "reduced service",
-    ]
-    # Subway line identifiers
-    LINE_KEYWORDS = ["line 1", "line 2", "line 3", "line 4",
+        routes = data.get("routes", [])
+        last_updated = data.get("lastUpdated", "")
+
+        # Filter to subway routes only (routeType = "Subway" or route in 1-4)
+        subway_alerts = [
+            a for a in routes
+            if (str(a.get("routeType", "")).lower() == "subway"
+                or str(a.get("route", "")) in ("1", "2", "3", "4"))
+        ]
+
+        # Separate unplanned vs planned
+        unplanned = [a for a in subway_alerts
+                     if str(a.get("alertType", "")).lower() == "unplanned"]
+        planned   = [a for a in subway_alerts
+                     if str(a.get("alertType", "")).lower() == "planned"]
+
+        # Determine severity
+        # alert (2): any unplanned NO_SERVICE, or 2+ unplanned Critical alerts
+        unplanned_no_svc = [a for a in unplanned
+                            if str(a.get("effect", "")).upper() == "NO_SERVICE"]
+        unplanned_critical = [a for a in unplanned
+                               if str(a.get("severity", "")).lower() == "critical"]
+
+        # warn (1): unplanned delays/reduced service, OR planned NO_SERVICE
+        #           (planned = weekend maintenance, not a crisis), OR shuttle running
+        unplanned_delays = [a for a in unplanned
+                            if str(a.get("effect", "")).upper() in
+                            ("REDUCED_SERVICE", "SIGNIFICANT_DELAYS", "DETOUR")]
+        shuttle_running = [a for a in subway_alerts
+                           if str(a.get("shuttleType", "")).lower() == "running"]
+        planned_no_svc  = [a for a in planned
+                           if str(a.get("effect", "")).upper() == "NO_SERVICE"]
+
+        if unplanned_no_svc or len(unplanned_critical) >= 2:
+            severity = 2
+        elif unplanned_delays or shuttle_running or planned_no_svc:
+            severity = 1
+        else:
+            severity = 0
+
+        # Build summary note
+        alert_count = len(unplanned)  # only unplanned count as "active alerts"
+        severity_labels = [
+            "Normal service on all subway lines.",
+            "Partial disruption — delays, reduced service, or planned closure with shuttle.",
+            "Major unplanned disruption — full or multi-segment suspension.",
+        ]
+        disruption_lines = []
+        for a in (unplanned_no_svc or unplanned_delays or shuttle_running or planned_no_svc)[:3]:
+            disruption_lines.append(a.get("title", a.get("headerText", ""))[:120])
+        disruption_detail = " | ".join(disruption_lines) if disruption_lines else ""
+
+        notes = (
+            f"TTC subway: {severity_labels[severity]} "
+            f"{len(subway_alerts)} subway alert(s) active "
+            f"({len(unplanned)} unplanned, {len(planned)} planned). "
+            + (f"Key alert: {disruption_detail} " if disruption_detail else "")
+            + f"API last updated: {last_updated[:16]}. "
+            f"Lines 1–4 (Yonge-University, Bloor-Danforth, Scarborough, Sheppard). "
+            f"~1.7M weekly riders. Unplanned Line 1/2 suspension = Tier-1 mobility event. "
+            f"Source: alerts.ttc.ca/api/alerts/live-alerts"
+        )
+
+        result = _ok("TTC Subway Service Status", severity, "",
+                     SOURCE_LABEL, DISPLAY_URL, str(date.today()), notes)
+        if severity == 2:
+            result["status"] = "alert"
+            result["threshold_note"] = "Unplanned subway suspension — major service disruption"
+        elif severity == 1:
+            result["status"] = "warn"
+            result["threshold_note"] = "Subway disruption — delays, reduced service, or planned closure"
+
+        results_out = [result]
+        if alert_count > 0:
+            results_out.append(
+                _ok("TTC Active Service Alerts", alert_count, "unplanned alerts",
+                    SOURCE_LABEL, DISPLAY_URL, str(date.today()),
+                    f"{alert_count} unplanned subway alert(s). "
+                    f"Check ttc.ca/service-advisories/all-service-alerts for detail.")
+            )
+            if alert_count > 0:
+                results_out[-1]["status"] = "warn" if severity < 2 else "alert"
+
+        return results_out
+
+    except (requests.RequestException, ValueError, KeyError) as e:
+        pass  # Fall through to GTFS-RT
+
+    # ── Fallback: GTFS-RT protobuf ─────────────────────────────────────────────
+    SUSPENSION_KW = ["no service", "suspended", "suspension", "shut down",
+                     "closed", "closure", "out of service"]
+    DISRUPTION_KW = ["delay", "reduced speed", "shuttle bus", "shuttle buses",
+                     "diversion", "bypassing", "reduced service"]
+    LINE_KW       = ["line 1", "line 2", "line 3", "line 4",
                      "yonge", "university", "bloor", "danforth",
-                     "scarborough", "sheppard", "subway", "metro"]
+                     "scarborough", "sheppard", "subway"]
 
-    def _classify_alerts(alert_texts):
-        """
-        Given a list of alert text strings, return (severity, alert_count, detail_note).
-        severity: 0=normal, 1=warn, 2=alert
-        """
-        subway_alerts = []
-        for text in alert_texts:
-            t = text.lower()
-            if any(k in t for k in LINE_KEYWORDS):
-                subway_alerts.append(text)
-
-        if not subway_alerts:
-            return 0, 0, "No active subway advisories detected."
-
-        severity = 0
-        for text in subway_alerts:
-            t = text.lower()
-            if any(k in t for k in SUSPENSION_KEYWORDS):
-                severity = 2
-                break
-            elif any(k in t for k in DISRUPTION_KEYWORDS):
-                severity = max(severity, 1)
-
-        detail = f"{len(subway_alerts)} subway advisory/advisories detected."
-        return severity, len(subway_alerts), detail
-
-    # ── Source 1: GTFS-RT protobuf ─────────────────────────────────────────────
     try:
         r = SESSION.get(GTFS_RT_URL, timeout=TIMEOUT)
         r.raise_for_status()
-        # Attempt protobuf parse if gtfs-realtime-bindings available
         try:
             from google.transit import gtfs_realtime_pb2
             feed = gtfs_realtime_pb2.FeedMessage()
             feed.ParseFromString(r.content)
-            alert_texts = []
+            texts = []
             for entity in feed.entity:
                 if entity.HasField("alert"):
                     for tr in entity.alert.header_text.translation:
-                        if tr.text:
-                            alert_texts.append(tr.text)
-                    for tr in entity.alert.description_text.translation:
-                        if tr.text:
-                            alert_texts.append(tr.text)
-            severity, count, detail = _classify_alerts(alert_texts)
-            severity_label = ["Normal service on all subway lines.",
-                              "Partial disruption — check ttc.ca for affected segment.",
-                              "Major disruption — full or multi-segment suspension."][severity]
-            status_val = severity
-            notes = (f"TTC subway: {severity_label} {detail} "
-                     f"Source: GTFS-RT feed (bustime.ttc.ca/gtfsrt/alerts). "
-                     f"Lines 1–4 (Yonge-University, Bloor-Danforth, Scarborough, Sheppard). "
-                     f"~1.7M weekly riders. A Line 1/2 full suspension is a Tier-1 mobility event.")
-            result = _ok("TTC Subway Service Status", status_val, "",
-                         SOURCE_LABEL, HTML_URL, str(date.today()), notes)
-            if severity == 2:
-                result["status"] = "alert"
-                result["threshold_note"] = "Major subway disruption — full or multi-segment suspension"
-            elif severity == 1:
-                result["status"] = "warn"
-                result["threshold_note"] = "Partial subway disruption — segment delay or shuttle operation"
-            results_out = [result]
-            if count > 0:
-                results_out.append(_ok("TTC Active Service Alerts", count, "alerts",
-                                       SOURCE_LABEL, HTML_URL, str(date.today()),
-                                       f"{count} active subway advisory/advisories. "
-                                       f"Check ttc.ca/service-advisories for line-specific detail."))
-            return results_out
+                        if tr.text: texts.append(tr.text)
         except ImportError:
-            # gtfs-realtime-bindings not installed — raw protobuf scan for keywords
-            raw_text = r.content.decode("utf-8", errors="replace").lower()
-            alert_texts = [raw_text]  # treat entire blob as one text for keyword scan
-            # fall through to keyword classification below
+            texts = [r.content.decode("utf-8", errors="replace")]
 
-    except requests.RequestException:
-        pass  # GTFS-RT unavailable — try next source
+        subway_texts = [t for t in texts if any(k in t.lower() for k in LINE_KW)]
+        if any(any(k in t.lower() for k in SUSPENSION_KW) for t in subway_texts):
+            severity = 2
+        elif any(any(k in t.lower() for k in DISRUPTION_KW) for t in subway_texts):
+            severity = 1
+        else:
+            severity = 0
 
-    # ── Source 2: TTC Internal JSON API ───────────────────────────────────────
-    try:
-        r = SESSION.get(API_URL, timeout=TIMEOUT,
-                        headers={"Accept": "application/json", "Referer": "https://www.ttc.ca/"})
-        r.raise_for_status()
-        data = r.json()
-        alert_texts = []
-        # Handle both list and dict response shapes
-        items = data if isinstance(data, list) else data.get("alerts", data.get("items", []))
-        for item in items:
-            for field in ["title", "description", "body", "message", "text"]:
-                val = item.get(field, "")
-                if val:
-                    alert_texts.append(str(val))
-        severity, count, detail = _classify_alerts(alert_texts)
-        severity_label = ["Normal service on all subway lines.",
-                          "Partial disruption — check ttc.ca for affected segment.",
-                          "Major disruption — full or multi-segment suspension."][severity]
-        notes = (f"TTC subway: {severity_label} {detail} "
-                 f"Source: TTC Service Advisories API. "
-                 f"Lines 1–4 monitored. ~1.7M weekly riders.")
+        severity_labels = ["Normal service.", "Partial disruption.", "Major disruption."]
         result = _ok("TTC Subway Service Status", severity, "",
-                     SOURCE_LABEL, HTML_URL, str(date.today()), notes)
+                     "TTC — bustime.ttc.ca/gtfsrt/alerts", DISPLAY_URL,
+                     str(date.today()),
+                     f"TTC subway: {severity_labels[severity]} Source: GTFS-RT fallback.")
         if severity == 2:
             result["status"] = "alert"
-            result["threshold_note"] = "Major subway disruption — full or multi-segment suspension"
+            result["threshold_note"] = "Unplanned subway suspension — major service disruption"
         elif severity == 1:
             result["status"] = "warn"
-            result["threshold_note"] = "Partial subway disruption — segment delay or shuttle operation"
-        results_out = [result]
-        if count > 0:
-            results_out.append(_ok("TTC Active Service Alerts", count, "alerts",
-                                   SOURCE_LABEL, HTML_URL, str(date.today()),
-                                   f"{count} active subway advisory/advisories."))
-        return results_out
+            result["threshold_note"] = "Subway disruption detected via GTFS-RT"
+        return [result]
 
-    except (requests.RequestException, ValueError, KeyError):
-        pass  # JSON API unavailable — try HTML scrape
-
-    # ── Source 3: HTML scrape (ttc.ca/service-advisories) ─────────────────────
-    try:
-        r = SESSION.get(HTML_URL, timeout=TIMEOUT)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
-
-        # Extract all visible text blocks that could be alert content
-        alert_texts = []
-        for el in soup.find_all(["h2", "h3", "h4", "p", "li", "div"],
-                                 class_=re.compile(r"alert|advisory|service|notice|disruption",
-                                                   re.I)):
-            t = el.get_text(" ", strip=True)
-            if len(t) > 20:  # skip tiny fragments
-                alert_texts.append(t)
-
-        # Fallback: grab any paragraph mentioning subway lines
-        if not alert_texts:
-            for el in soup.find_all(["p", "li"]):
-                t = el.get_text(" ", strip=True)
-                if any(k in t.lower() for k in LINE_KEYWORDS) and len(t) > 20:
-                    alert_texts.append(t)
-
-        severity, count, detail = _classify_alerts(alert_texts)
-        severity_label = ["Normal service on all subway lines.",
-                          "Partial disruption — check ttc.ca for affected segment.",
-                          "Major disruption — full or multi-segment suspension."][severity]
-        notes = (f"TTC subway: {severity_label} {detail} "
-                 f"Source: ttc.ca/service-advisories (HTML scrape). "
-                 f"Lines 1–4 monitored. ~1.7M weekly riders.")
-        result = _ok("TTC Subway Service Status", severity, "",
-                     SOURCE_LABEL, HTML_URL, str(date.today()), notes)
-        if severity == 2:
-            result["status"] = "alert"
-            result["threshold_note"] = "Major subway disruption — full or multi-segment suspension"
-        elif severity == 1:
-            result["status"] = "warn"
-            result["threshold_note"] = "Partial subway disruption — segment delay or shuttle operation"
-        results_out = [result]
-        if count > 0:
-            results_out.append(_ok("TTC Active Service Alerts", count, "alerts",
-                                   SOURCE_LABEL, HTML_URL, str(date.today()),
-                                   f"{count} active subway advisory/advisories."))
-        return results_out
-
-    except requests.RequestException as e:
-        return [_err("TTC Subway Service Status", SOURCE_LABEL, HTML_URL, str(e))]
     except Exception as e:
-        return [_err("TTC Subway Service Status", SOURCE_LABEL, HTML_URL,
-                     f"Parse error: {e}")]
+        return [_err("TTC Subway Service Status", SOURCE_LABEL, DISPLAY_URL, str(e))]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3331,7 +3295,8 @@ def check_network_connectivity():
         "www.cer-rec.gc.ca":                        "CER TransCanada Mainline data",
         "www.gotransit.com":                        "GO Transit service alerts",
         "www.ttc.ca":                               "TTC service advisories",
-        "bustime.ttc.ca":                           "TTC GTFS-RT alerts feed",
+        "alerts.ttc.ca":                            "TTC live alerts API (primary)",
+        "bustime.ttc.ca":                           "TTC GTFS-RT alerts feed (fallback)",
         "www.viarail.ca":                           "VIA Rail corridor status",
         "www.cn.ca":                                "CN Rail labour risk",
         "www.cpkcr.com":                            "CPKC labour risk",
