@@ -1828,24 +1828,260 @@ def fetch_ttc_service_status():
         if is_stale:
             age_str = (f"{data_age_hours:.1f}h" if data_age_hours is not None
                        else "unknown age")
-            stale_notes = (
-                f"⚠️ TTC alerts API data is STALE ({age_str} old — threshold: "
-                f"{MAX_STALENESS_HOURS}h). Cannot confirm current subway status. "
-                f"API last updated: {last_updated[:16]}. "
-                f"The API has been observed caching snapshots for days during active disruptions. "
-                f"Check ttc.ca/service-advisories/all-service-alerts for real-time status. "
-                f"Source: alerts.ttc.ca/api/alerts/live-alerts"
-            )
-            stale_result = _ok("TTC Subway Service Status", None, "",
-                               SOURCE_LABEL, DISPLAY_URL, str(date.today()), stale_notes)
-            stale_result["status"] = "warn"
-            stale_result["value"] = None
-            stale_result["threshold_note"] = (
-                f"TTC alerts API stale ({age_str}) — status unverifiable. "
-                f"Check ttc.ca directly."
-            )
-            return [stale_result]
-        # ── End freshness check ───────────────────────────────────────────────
+            # ── Stale API: cascade to @TTCnotices Nitter RSS ──────────────────
+            # alerts.ttc.ca has been observed serving multi-week cached snapshots.
+            # When stale, try @TTCnotices via public Nitter instances before giving up.
+            # @TTCnotices is the TTC's operational alert account — posts within
+            # minutes of any unplanned disruption (subway/bus/streetcar).
+            # We try multiple instances in order; first successful RSS parse wins.
+            #
+            # Instance selection rationale (as of 2026-04-10):
+            #   xcancel.com   — most reliable, maintained fork with account pool;
+            #                   blocks robots.txt but serves RSS to non-browser UAs
+            #   nitter.poast.org — long-running, often up; guest-account based
+            #   nitter.privacyredirect.com — community-maintained, high uptime
+            #   nitter.net    — original instance, intermittent but worth trying
+            #
+            # @TTCnotices (not @TTCNewsroom) posts every operational alert:
+            #   "Line 2 Bloor-Danforth: No service ... due to a hydraulic leak"
+            # was live within ~10 min of the Apr 7 2026 closure; never appeared
+            # in alerts.ttc.ca.
+            NITTER_INSTANCES = [
+                "https://xcancel.com",
+                "https://nitter.poast.org",
+                "https://nitter.privacyredirect.com",
+                "https://nitter.net",
+            ]
+            TTC_ACCOUNT   = "TTCnotices"   # operational alerts, not press releases
+            LOOKBACK_HOURS = 4             # only consider tweets from last 4 hours
+
+            # Keywords → alert (unplanned, major)
+            NITTER_ALERT_KW = [
+                "no service", "suspended", "suspension", "out of service",
+                "hydraulic", "fire", "police", "emergency", "evacuation",
+                "shut down", "shutdown", "not operating",
+            ]
+            # Keywords → warn (disruption, partial)
+            NITTER_WARN_KW = [
+                "delay", "delays", "reduced speed", "shuttle bus", "shuttle buses",
+                "diversion", "bypassing", "bypassed", "reduced service",
+                "slow", "single track",
+            ]
+            # Must mention subway lines to count
+            NITTER_LINE_KW = [
+                "line 1", "line 2", "line 3", "line 4",
+                "yonge", "university", "bloor", "danforth",
+                "scarborough", "sheppard", "subway",
+            ]
+
+            def _parse_nitter_rss(xml_text):
+                """
+                Parse Nitter Atom/RSS XML. Returns list of (pub_str, text) tuples.
+                Nitter serves Atom: <entry><updated>…</updated><content>…</content>
+                Falls back to RSS <item><pubDate>/<description> format.
+
+                BUG NOTE: ET Element objects are falsy when they have no children,
+                so `el_a or el_b` silently skips a valid-but-empty element.
+                All child lookups MUST use explicit `is not None` checks.
+                """
+                try:
+                    root = ET.fromstring(xml_text.encode("utf-8", errors="replace"))
+                except ET.ParseError:
+                    return []
+
+                ATOM = "http://www.w3.org/2005/Atom"
+                ns   = {"atom": ATOM}
+                items = []
+
+                def _find_first(parent, *tags):
+                    """Return first non-None result across a list of tag searches."""
+                    for tag in tags:
+                        try:
+                            el = parent.find(tag, ns) if "{" not in tag and ":" in tag else parent.find(tag)
+                        except Exception:
+                            el = None
+                        if el is not None:
+                            return el
+                    return None
+
+                # ── Atom format (Nitter default) ──────────────────────────────
+                # findall with ns dict works correctly (returns list, not element)
+                entries = root.findall(".//atom:entry", ns)
+                if not entries:
+                    entries = root.findall(f".//{{{ATOM}}}entry")
+
+                for entry in entries:
+                    # Timestamp: <updated> or <published>
+                    updated_el = _find_first(entry,
+                        f"{{{ATOM}}}updated", f"{{{ATOM}}}published",
+                        "atom:updated", "atom:published")
+                    pub_str = (updated_el.text or "").strip() if updated_el is not None else ""
+
+                    # Content: <content> preferred, then <title>
+                    content_el = _find_first(entry,
+                        f"{{{ATOM}}}content", f"{{{ATOM}}}summary", f"{{{ATOM}}}title",
+                        "atom:content", "atom:summary", "atom:title")
+                    raw  = (content_el.text or "") if content_el is not None else ""
+                    text = re.sub(r"<[^>]+>", " ", raw).strip()
+                    text = re.sub(r"\s+", " ", text)
+
+                    if pub_str and text:
+                        items.append((pub_str, text))
+
+                # ── RSS 2.0 fallback (<item> format) ─────────────────────────
+                if not items:
+                    for item in root.findall(".//item"):
+                        pub_el  = item.find("pubDate")
+                        desc_el = item.find("description")
+                        pub_str = (pub_el.text  or "").strip() if pub_el  is not None else ""
+                        raw     = (desc_el.text or "")         if desc_el is not None else ""
+                        text    = re.sub(r"<[^>]+>", " ", raw).strip()
+                        text    = re.sub(r"\s+", " ", text)
+                        if pub_str and text:
+                            items.append((pub_str, text))
+
+                return items
+
+            def _parse_rss_dt(pub_str):
+                """
+                Parse RSS/Atom datetime string → naive UTC datetime. Returns None on failure.
+                Handles: ISO 8601 (+00:00 / Z), RFC 2822 (with %z or literal GMT).
+                Always returns a naive datetime for consistent comparison with utcnow().
+                """
+                pub_str = pub_str.strip()
+                for fmt in ("%Y-%m-%dT%H:%M:%S+00:00",
+                            "%Y-%m-%dT%H:%M:%SZ",
+                            "%a, %d %b %Y %H:%M:%S %z",
+                            "%a, %d %b %Y %H:%M:%S GMT"):
+                    try:
+                        dt = datetime.strptime(pub_str[:30], fmt)
+                        # Convert to naive UTC
+                        offset = dt.utcoffset() if dt.utcoffset is not None else None
+                        if offset is not None:
+                            dt = (dt.replace(tzinfo=None) - offset)
+                        else:
+                            dt = dt.replace(tzinfo=None)
+                        return dt
+                    except (ValueError, TypeError):
+                        continue
+                return None
+
+            nitter_severity = None
+            nitter_source   = None
+            nitter_texts    = []
+
+            for instance in NITTER_INSTANCES:
+                rss_url = f"{instance}/{TTC_ACCOUNT}/rss"
+                try:
+                    rss_r = SESSION.get(
+                        rss_url, timeout=10,
+                        headers={"User-Agent": "TII-Scraper/1.4 Toronto Infrastructure Intelligence",
+                                 "Accept": "application/rss+xml, application/atom+xml, text/xml, */*"}
+                    )
+                    rss_r.raise_for_status()
+                    ct = rss_r.headers.get("Content-Type", "")
+                    if rss_r.status_code != 200 or len(rss_r.content) < 200:
+                        continue
+                    if "html" in ct and "<html" in rss_r.text[:500].lower():
+                        continue  # got an error page, not XML
+
+                    entries = _parse_nitter_rss(rss_r.text)
+                    if not entries:
+                        continue
+
+                    # Filter to recent tweets only (within LOOKBACK_HOURS)
+                    now_utc = datetime.utcnow()
+                    recent_texts = []
+                    for pub_str, text in entries:
+                        dt = _parse_rss_dt(pub_str)
+                        if dt is None:
+                            continue
+                        age_h = (now_utc - dt).total_seconds() / 3600
+                        if age_h <= LOOKBACK_HOURS:
+                            recent_texts.append(text)
+
+                    if not recent_texts:
+                        # Feed returned entries but none are recent — that's data,
+                        # not a failure. No recent tweets = no active disruption.
+                        nitter_severity = 0
+                        nitter_source   = instance
+                        nitter_texts    = []
+                        break
+
+                    # Classify by line keyword + severity keyword
+                    subway_texts = [t for t in recent_texts
+                                    if any(k in t.lower() for k in NITTER_LINE_KW)]
+                    if not subway_texts:
+                        nitter_severity = 0
+                        nitter_source   = instance
+                        nitter_texts    = []
+                        break
+
+                    sev = 0
+                    for t in subway_texts:
+                        tl = t.lower()
+                        if any(k in tl for k in NITTER_ALERT_KW):
+                            sev = 2
+                            break
+                        elif any(k in tl for k in NITTER_WARN_KW):
+                            sev = max(sev, 1)
+
+                    nitter_severity = sev
+                    nitter_source   = instance
+                    nitter_texts    = subway_texts[:3]
+                    break  # successfully parsed — stop trying instances
+
+                except requests.RequestException:
+                    continue  # try next instance
+
+            # ── Build result from Nitter data (or stale fallback) ─────────────
+            if nitter_severity is not None:
+                # Nitter succeeded
+                sev_labels = [
+                    "Normal service — no recent subway alerts on @TTCnotices.",
+                    "Disruption detected via @TTCnotices — delays or partial suspension.",
+                    "Major disruption detected via @TTCnotices — possible full suspension.",
+                ]
+                alert_snippets = " | ".join(t[:100] for t in nitter_texts)
+                nitter_notes = (
+                    f"TTC subway: {sev_labels[nitter_severity]} "
+                    f"Source: @TTCnotices RSS via {nitter_source} "
+                    f"(alerts.ttc.ca API was stale: {age_str} old). "
+                    + (f"Recent alerts: {alert_snippets} " if alert_snippets else "")
+                    + f"Lookback window: {LOOKBACK_HOURS}h. "
+                    f"@TTCnotices posts within ~10 min of any unplanned disruption."
+                )
+                nitter_result = _ok("TTC Subway Service Status", nitter_severity, "",
+                                    f"TTC — @TTCnotices via {nitter_source}",
+                                    DISPLAY_URL, str(date.today()), nitter_notes)
+                if nitter_severity == 2:
+                    nitter_result["status"] = "alert"
+                    nitter_result["threshold_note"] = (
+                        "Unplanned subway suspension — major disruption via @TTCnotices")
+                elif nitter_severity == 1:
+                    nitter_result["status"] = "warn"
+                    nitter_result["threshold_note"] = (
+                        "Subway disruption detected via @TTCnotices RSS")
+                return [nitter_result]
+
+            else:
+                # All Nitter instances failed — return stale warning as last resort
+                stale_notes = (
+                    f"⚠️ TTC alerts API STALE ({age_str}) and all @TTCnotices RSS "
+                    f"sources unavailable. Cannot confirm current subway status. "
+                    f"API last updated: {last_updated[:16]}. "
+                    f"Check ttc.ca/service-advisories/all-service-alerts directly. "
+                    f"Instances tried: {', '.join(NITTER_INSTANCES)}"
+                )
+                stale_result = _ok("TTC Subway Service Status", None, "",
+                                   SOURCE_LABEL, DISPLAY_URL, str(date.today()), stale_notes)
+                stale_result["status"] = "warn"
+                stale_result["value"] = None
+                stale_result["threshold_note"] = (
+                    f"TTC alerts API stale ({age_str}) + @TTCnotices RSS unavailable. "
+                    f"Check ttc.ca directly.")
+                return [stale_result]
+        # ── End freshness check / Nitter cascade ──────────────────────────────
 
         # Filter to subway routes only (routeType = "Subway" or route in 1-4)
         subway_alerts = [
