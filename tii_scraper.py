@@ -1764,6 +1764,9 @@ def fetch_ttc_service_status():
       — Returns structured records with fields: routeType, effect, severity,
         alertType, title, headerText, shuttleType, cause, activePeriod.
       — No JS rendering required. Confirmed live as of 2026-04-10.
+      — FRESHNESS CHECK: if lastUpdated > 2h old, overrides to warn=stale.
+        API observed serving multi-week cached snapshots during active disruptions
+        (confirmed 2026-04-10 during an active Line 2 hydraulic closure).
 
     FALLBACK: bustime.ttc.ca/gtfsrt/alerts (GTFS-RT protobuf)
       — Requires `pip install gtfs-realtime-bindings`; silently skipped if absent.
@@ -1803,6 +1806,46 @@ def fetch_ttc_service_status():
 
         routes = data.get("routes", [])
         last_updated = data.get("lastUpdated", "")
+
+        # ── Freshness check ───────────────────────────────────────────────────
+        # The TTC alerts API has been observed serving stale cached snapshots
+        # (confirmed 2026-04-10: lastUpdated was 3 weeks old during an active
+        # Line 2 closure). If data is >2 hours old, we cannot trust it to reflect
+        # current unplanned disruptions — return warn with staleness flag instead.
+        MAX_STALENESS_HOURS = 2
+        data_age_hours = None
+        is_stale = False
+        if last_updated:
+            try:
+                # Parse ISO 8601 UTC timestamp (e.g. "2026-03-21T15:48:56.74Z")
+                lu_str = last_updated.rstrip("Z").split(".")[0]  # strip ms + Z
+                lu_dt  = datetime.strptime(lu_str, "%Y-%m-%dT%H:%M:%S")
+                data_age_hours = (datetime.utcnow() - lu_dt).total_seconds() / 3600
+                is_stale = data_age_hours > MAX_STALENESS_HOURS
+            except (ValueError, TypeError):
+                is_stale = True  # can't parse timestamp → treat as stale
+
+        if is_stale:
+            age_str = (f"{data_age_hours:.1f}h" if data_age_hours is not None
+                       else "unknown age")
+            stale_notes = (
+                f"⚠️ TTC alerts API data is STALE ({age_str} old — threshold: "
+                f"{MAX_STALENESS_HOURS}h). Cannot confirm current subway status. "
+                f"API last updated: {last_updated[:16]}. "
+                f"The API has been observed caching snapshots for days during active disruptions. "
+                f"Check ttc.ca/service-advisories/all-service-alerts for real-time status. "
+                f"Source: alerts.ttc.ca/api/alerts/live-alerts"
+            )
+            stale_result = _ok("TTC Subway Service Status", None, "",
+                               SOURCE_LABEL, DISPLAY_URL, str(date.today()), stale_notes)
+            stale_result["status"] = "warn"
+            stale_result["value"] = None
+            stale_result["threshold_note"] = (
+                f"TTC alerts API stale ({age_str}) — status unverifiable. "
+                f"Check ttc.ca directly."
+            )
+            return [stale_result]
+        # ── End freshness check ───────────────────────────────────────────────
 
         # Filter to subway routes only (routeType = "Subway" or route in 1-4)
         subway_alerts = [
