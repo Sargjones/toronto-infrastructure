@@ -1759,462 +1759,174 @@ def fetch_ttc_service_status():
     """
     TTC Subway Service Status — real-time disruption detection.
 
-    PRIMARY SOURCE: alerts.ttc.ca/api/alerts/live-alerts
-      — Official TTC alerts JSON API (the same backend the ttc.ca website reads).
-      — Returns structured records with fields: routeType, effect, severity,
-        alertType, title, headerText, shuttleType, cause, activePeriod.
-      — No JS rendering required. Confirmed live as of 2026-04-10.
-      — FRESHNESS CHECK: if lastUpdated > 2h old, overrides to warn=stale.
-        API observed serving multi-week cached snapshots during active disruptions
-        (confirmed 2026-04-10 during an active Line 2 hydraulic closure).
+    SOURCE: alerts.ttc.ca/api/alerts/live-alerts
+      Official TTC alerts JSON API — same backend as ttc.ca website.
+      Confirmed behaviour (2026-04-10, two hydraulic incidents):
+        - Feed lastUpdated == max(individual alert lastUpdated) — always in sync.
+        - API updates on alert state changes; may lag active incidents by ~2h
+          during overnight maintenance windows (missed opening of Ossington–Woodbine
+          closure at 05:35 EDT, caught resolution at 07:27 UTC same day).
+        - Resolving incidents appear as effect=NO_EFFECT + shuttleType=Running.
+        - Junk routes (6, 9999 etc.) leak through routeType filter — strict
+          route number filter {"1","2","3","4"} required.
 
-    FALLBACK: bustime.ttc.ca/gtfsrt/alerts (GTFS-RT protobuf)
-      — Requires `pip install gtfs-realtime-bindings`; silently skipped if absent.
+    Severity logic (Lines 1–4 only):
+      alert (2) = Unplanned + NO_SERVICE
+      warn  (1) = shuttleType=Running on ANY alert (shuttles physically operating
+                  = disruption in progress or resolving, regardless of effect field)
+                  OR Unplanned + REDUCED_SERVICE / SIGNIFICANT_DELAYS / DETOUR
+                  OR Planned + NO_SERVICE (weekend closure with advance notice)
+                  OR feed data stale > 6h (status uncertain)
+      ok    (0) = no active disruption signals
 
-    Returns:
-      - TTC Subway Service Status: 0=normal, 1=partial disruption, 2=major disruption
-      - TTC Active Service Alerts: count of active Unplanned subway alerts
+    Staleness threshold: 6h. During active incidents the API may sit quiet for
+    1–2h, so 2h was too aggressive. 6h covers the longest observed overnight
+    maintenance window without false stale-warnings during the day.
 
-    Status logic (effect field, subway routes only):
-      alert (2) = any Unplanned alert with effect NO_SERVICE
-                  OR 2+ subway segments with Critical severity
-      warn  (1) = any Unplanned alert with effect REDUCED_SERVICE / SIGNIFICANT_DELAYS
-                  OR any Planned alert with effect NO_SERVICE (advance notice, not crisis)
-                  OR shuttleType = "Running" on any subway route
-      ok    (0) = no active subway alerts, or only elevator/escalator notices
-
-    Note: Planned track closures (alertType="Planned") are common weekend maintenance.
-    Unplanned closures (alertType="Unplanned") are the signal to escalate to alert.
-
-    Lines monitored: Line 1 (Yonge-University), Line 2 (Bloor-Danforth),
-                     Line 3 (Scarborough), Line 4 (Sheppard).
-    TTC carries ~1.7M riders/week — an unplanned Line 1/2 suspension is a
-    Tier-1 urban mobility event cascading into surface congestion and GO overcrowding.
+    Validated in Thonny against live API data 2026-04-10 (active Line 2 incident).
+    Lines: 1 Yonge-University, 2 Bloor-Danforth, 3 Scarborough, 4 Sheppard.
+    ~1.7M weekly riders — unplanned Line 1/2 suspension = Tier-1 mobility event.
     """
     LIVE_ALERTS_URL = "https://alerts.ttc.ca/api/alerts/live-alerts"
-    GTFS_RT_URL     = "https://bustime.ttc.ca/gtfsrt/alerts"
     DISPLAY_URL     = "https://www.ttc.ca/service-advisories/all-service-alerts"
     SOURCE_LABEL    = "TTC — alerts.ttc.ca/api/alerts/live-alerts"
+    SUBWAY_ROUTES   = {"1", "2", "3", "4"}
+    MAX_STALE_HOURS = 6
 
-    # ── Source 1: alerts.ttc.ca JSON API ──────────────────────────────────────
     try:
         r = SESSION.get(LIVE_ALERTS_URL, timeout=TIMEOUT,
-                        headers={"Accept": "application/json",
-                                 "Referer": "https://www.ttc.ca/"})
+                        headers={"Referer": "https://www.ttc.ca/"})
         r.raise_for_status()
         data = r.json()
-
-        routes = data.get("routes", [])
-        last_updated = data.get("lastUpdated", "")
-
-        # ── Freshness check ───────────────────────────────────────────────────
-        # The TTC alerts API has been observed serving stale cached snapshots
-        # (confirmed 2026-04-10: lastUpdated was 3 weeks old during an active
-        # Line 2 closure). If data is >2 hours old, we cannot trust it to reflect
-        # current unplanned disruptions — return warn with staleness flag instead.
-        MAX_STALENESS_HOURS = 2
-        data_age_hours = None
-        is_stale = False
-        if last_updated:
-            try:
-                # Parse ISO 8601 UTC timestamp (e.g. "2026-03-21T15:48:56.74Z")
-                lu_str = last_updated.rstrip("Z").split(".")[0]  # strip ms + Z
-                lu_dt  = datetime.strptime(lu_str, "%Y-%m-%dT%H:%M:%S")
-                data_age_hours = (datetime.utcnow() - lu_dt).total_seconds() / 3600
-                is_stale = data_age_hours > MAX_STALENESS_HOURS
-            except (ValueError, TypeError):
-                is_stale = True  # can't parse timestamp → treat as stale
-
-        if is_stale:
-            age_str = (f"{data_age_hours:.1f}h" if data_age_hours is not None
-                       else "unknown age")
-            # ── Stale API: cascade to @TTCnotices Nitter RSS ──────────────────
-            # alerts.ttc.ca has been observed serving multi-week cached snapshots.
-            # When stale, try @TTCnotices via public Nitter instances before giving up.
-            # @TTCnotices is the TTC's operational alert account — posts within
-            # minutes of any unplanned disruption (subway/bus/streetcar).
-            # We try multiple instances in order; first successful RSS parse wins.
-            #
-            # Instance selection rationale (as of 2026-04-10):
-            #   xcancel.com   — most reliable, maintained fork with account pool;
-            #                   blocks robots.txt but serves RSS to non-browser UAs
-            #   nitter.poast.org — long-running, often up; guest-account based
-            #   nitter.privacyredirect.com — community-maintained, high uptime
-            #   nitter.net    — original instance, intermittent but worth trying
-            #
-            # @TTCnotices (not @TTCNewsroom) posts every operational alert:
-            #   "Line 2 Bloor-Danforth: No service ... due to a hydraulic leak"
-            # was live within ~10 min of the Apr 7 2026 closure; never appeared
-            # in alerts.ttc.ca.
-            NITTER_INSTANCES = [
-                "https://xcancel.com",
-                "https://nitter.poast.org",
-                "https://nitter.privacyredirect.com",
-                "https://nitter.net",
-            ]
-            TTC_ACCOUNT   = "TTCnotices"   # operational alerts, not press releases
-            LOOKBACK_HOURS = 4             # only consider tweets from last 4 hours
-
-            # Keywords → alert (unplanned, major)
-            NITTER_ALERT_KW = [
-                "no service", "suspended", "suspension", "out of service",
-                "hydraulic", "fire", "police", "emergency", "evacuation",
-                "shut down", "shutdown", "not operating",
-            ]
-            # Keywords → warn (disruption, partial)
-            NITTER_WARN_KW = [
-                "delay", "delays", "reduced speed", "shuttle bus", "shuttle buses",
-                "diversion", "bypassing", "bypassed", "reduced service",
-                "slow", "single track",
-            ]
-            # Must mention subway lines to count
-            NITTER_LINE_KW = [
-                "line 1", "line 2", "line 3", "line 4",
-                "yonge", "university", "bloor", "danforth",
-                "scarborough", "sheppard", "subway",
-            ]
-
-            def _parse_nitter_rss(xml_text):
-                """
-                Parse Nitter Atom/RSS XML. Returns list of (pub_str, text) tuples.
-                Nitter serves Atom: <entry><updated>…</updated><content>…</content>
-                Falls back to RSS <item><pubDate>/<description> format.
-
-                BUG NOTE: ET Element objects are falsy when they have no children,
-                so `el_a or el_b` silently skips a valid-but-empty element.
-                All child lookups MUST use explicit `is not None` checks.
-                """
-                try:
-                    root = ET.fromstring(xml_text.encode("utf-8", errors="replace"))
-                except ET.ParseError:
-                    return []
-
-                ATOM = "http://www.w3.org/2005/Atom"
-                ns   = {"atom": ATOM}
-                items = []
-
-                def _find_first(parent, *tags):
-                    """Return first non-None result across a list of tag searches."""
-                    for tag in tags:
-                        try:
-                            el = parent.find(tag, ns) if "{" not in tag and ":" in tag else parent.find(tag)
-                        except Exception:
-                            el = None
-                        if el is not None:
-                            return el
-                    return None
-
-                # ── Atom format (Nitter default) ──────────────────────────────
-                # findall with ns dict works correctly (returns list, not element)
-                entries = root.findall(".//atom:entry", ns)
-                if not entries:
-                    entries = root.findall(f".//{{{ATOM}}}entry")
-
-                for entry in entries:
-                    # Timestamp: <updated> or <published>
-                    updated_el = _find_first(entry,
-                        f"{{{ATOM}}}updated", f"{{{ATOM}}}published",
-                        "atom:updated", "atom:published")
-                    pub_str = (updated_el.text or "").strip() if updated_el is not None else ""
-
-                    # Content: <content> preferred, then <title>
-                    content_el = _find_first(entry,
-                        f"{{{ATOM}}}content", f"{{{ATOM}}}summary", f"{{{ATOM}}}title",
-                        "atom:content", "atom:summary", "atom:title")
-                    raw  = (content_el.text or "") if content_el is not None else ""
-                    text = re.sub(r"<[^>]+>", " ", raw).strip()
-                    text = re.sub(r"\s+", " ", text)
-
-                    if pub_str and text:
-                        items.append((pub_str, text))
-
-                # ── RSS 2.0 fallback (<item> format) ─────────────────────────
-                if not items:
-                    for item in root.findall(".//item"):
-                        pub_el  = item.find("pubDate")
-                        desc_el = item.find("description")
-                        pub_str = (pub_el.text  or "").strip() if pub_el  is not None else ""
-                        raw     = (desc_el.text or "")         if desc_el is not None else ""
-                        text    = re.sub(r"<[^>]+>", " ", raw).strip()
-                        text    = re.sub(r"\s+", " ", text)
-                        if pub_str and text:
-                            items.append((pub_str, text))
-
-                return items
-
-            def _parse_rss_dt(pub_str):
-                """
-                Parse RSS/Atom datetime string → naive UTC datetime. Returns None on failure.
-                Handles: ISO 8601 (+00:00 / Z), RFC 2822 (with %z or literal GMT).
-                Always returns a naive datetime for consistent comparison with utcnow().
-                """
-                pub_str = pub_str.strip()
-                for fmt in ("%Y-%m-%dT%H:%M:%S+00:00",
-                            "%Y-%m-%dT%H:%M:%SZ",
-                            "%a, %d %b %Y %H:%M:%S %z",
-                            "%a, %d %b %Y %H:%M:%S GMT"):
-                    try:
-                        dt = datetime.strptime(pub_str[:30], fmt)
-                        # Convert to naive UTC
-                        offset = dt.utcoffset() if dt.utcoffset is not None else None
-                        if offset is not None:
-                            dt = (dt.replace(tzinfo=None) - offset)
-                        else:
-                            dt = dt.replace(tzinfo=None)
-                        return dt
-                    except (ValueError, TypeError):
-                        continue
-                return None
-
-            nitter_severity = None
-            nitter_source   = None
-            nitter_texts    = []
-
-            for instance in NITTER_INSTANCES:
-                rss_url = f"{instance}/{TTC_ACCOUNT}/rss"
-                try:
-                    rss_r = SESSION.get(
-                        rss_url, timeout=10,
-                        headers={"User-Agent": "TII-Scraper/1.4 Toronto Infrastructure Intelligence",
-                                 "Accept": "application/rss+xml, application/atom+xml, text/xml, */*"}
-                    )
-                    rss_r.raise_for_status()
-                    ct = rss_r.headers.get("Content-Type", "")
-                    if rss_r.status_code != 200 or len(rss_r.content) < 200:
-                        continue
-                    if "html" in ct and "<html" in rss_r.text[:500].lower():
-                        continue  # got an error page, not XML
-
-                    entries = _parse_nitter_rss(rss_r.text)
-                    if not entries:
-                        continue
-
-                    # Filter to recent tweets only (within LOOKBACK_HOURS)
-                    now_utc = datetime.utcnow()
-                    recent_texts = []
-                    for pub_str, text in entries:
-                        dt = _parse_rss_dt(pub_str)
-                        if dt is None:
-                            continue
-                        age_h = (now_utc - dt).total_seconds() / 3600
-                        if age_h <= LOOKBACK_HOURS:
-                            recent_texts.append(text)
-
-                    if not recent_texts:
-                        # Feed returned entries but none are recent — that's data,
-                        # not a failure. No recent tweets = no active disruption.
-                        nitter_severity = 0
-                        nitter_source   = instance
-                        nitter_texts    = []
-                        break
-
-                    # Classify by line keyword + severity keyword
-                    subway_texts = [t for t in recent_texts
-                                    if any(k in t.lower() for k in NITTER_LINE_KW)]
-                    if not subway_texts:
-                        nitter_severity = 0
-                        nitter_source   = instance
-                        nitter_texts    = []
-                        break
-
-                    sev = 0
-                    for t in subway_texts:
-                        tl = t.lower()
-                        if any(k in tl for k in NITTER_ALERT_KW):
-                            sev = 2
-                            break
-                        elif any(k in tl for k in NITTER_WARN_KW):
-                            sev = max(sev, 1)
-
-                    nitter_severity = sev
-                    nitter_source   = instance
-                    nitter_texts    = subway_texts[:3]
-                    break  # successfully parsed — stop trying instances
-
-                except requests.RequestException:
-                    continue  # try next instance
-
-            # ── Build result from Nitter data (or stale fallback) ─────────────
-            if nitter_severity is not None:
-                # Nitter succeeded
-                sev_labels = [
-                    "Normal service — no recent subway alerts on @TTCnotices.",
-                    "Disruption detected via @TTCnotices — delays or partial suspension.",
-                    "Major disruption detected via @TTCnotices — possible full suspension.",
-                ]
-                alert_snippets = " | ".join(t[:100] for t in nitter_texts)
-                nitter_notes = (
-                    f"TTC subway: {sev_labels[nitter_severity]} "
-                    f"Source: @TTCnotices RSS via {nitter_source} "
-                    f"(alerts.ttc.ca API was stale: {age_str} old). "
-                    + (f"Recent alerts: {alert_snippets} " if alert_snippets else "")
-                    + f"Lookback window: {LOOKBACK_HOURS}h. "
-                    f"@TTCnotices posts within ~10 min of any unplanned disruption."
-                )
-                nitter_result = _ok("TTC Subway Service Status", nitter_severity, "",
-                                    f"TTC — @TTCnotices via {nitter_source}",
-                                    DISPLAY_URL, str(date.today()), nitter_notes)
-                if nitter_severity == 2:
-                    nitter_result["status"] = "alert"
-                    nitter_result["threshold_note"] = (
-                        "Unplanned subway suspension — major disruption via @TTCnotices")
-                elif nitter_severity == 1:
-                    nitter_result["status"] = "warn"
-                    nitter_result["threshold_note"] = (
-                        "Subway disruption detected via @TTCnotices RSS")
-                return [nitter_result]
-
-            else:
-                # All Nitter instances failed — return stale warning as last resort
-                stale_notes = (
-                    f"⚠️ TTC alerts API STALE ({age_str}) and all @TTCnotices RSS "
-                    f"sources unavailable. Cannot confirm current subway status. "
-                    f"API last updated: {last_updated[:16]}. "
-                    f"Check ttc.ca/service-advisories/all-service-alerts directly. "
-                    f"Instances tried: {', '.join(NITTER_INSTANCES)}"
-                )
-                stale_result = _ok("TTC Subway Service Status", None, "",
-                                   SOURCE_LABEL, DISPLAY_URL, str(date.today()), stale_notes)
-                stale_result["status"] = "warn"
-                stale_result["value"] = None
-                stale_result["threshold_note"] = (
-                    f"TTC alerts API stale ({age_str}) + @TTCnotices RSS unavailable. "
-                    f"Check ttc.ca directly.")
-                return [stale_result]
-        # ── End freshness check / Nitter cascade ──────────────────────────────
-
-        # Filter to subway routes only (routeType = "Subway" or route in 1-4)
-        subway_alerts = [
-            a for a in routes
-            if (str(a.get("routeType", "")).lower() == "subway"
-                or str(a.get("route", "")) in ("1", "2", "3", "4"))
-        ]
-
-        # Separate unplanned vs planned
-        unplanned = [a for a in subway_alerts
-                     if str(a.get("alertType", "")).lower() == "unplanned"]
-        planned   = [a for a in subway_alerts
-                     if str(a.get("alertType", "")).lower() == "planned"]
-
-        # Determine severity
-        # alert (2): any unplanned NO_SERVICE, or 2+ unplanned Critical alerts
-        unplanned_no_svc = [a for a in unplanned
-                            if str(a.get("effect", "")).upper() == "NO_SERVICE"]
-        unplanned_critical = [a for a in unplanned
-                               if str(a.get("severity", "")).lower() == "critical"]
-
-        # warn (1): unplanned delays/reduced service, OR planned NO_SERVICE
-        #           (planned = weekend maintenance, not a crisis), OR shuttle running
-        unplanned_delays = [a for a in unplanned
-                            if str(a.get("effect", "")).upper() in
-                            ("REDUCED_SERVICE", "SIGNIFICANT_DELAYS", "DETOUR")]
-        shuttle_running = [a for a in subway_alerts
-                           if str(a.get("shuttleType", "")).lower() == "running"]
-        planned_no_svc  = [a for a in planned
-                           if str(a.get("effect", "")).upper() == "NO_SERVICE"]
-
-        if unplanned_no_svc or len(unplanned_critical) >= 2:
-            severity = 2
-        elif unplanned_delays or shuttle_running or planned_no_svc:
-            severity = 1
-        else:
-            severity = 0
-
-        # Build summary note
-        alert_count = len(unplanned)  # only unplanned count as "active alerts"
-        severity_labels = [
-            "Normal service on all subway lines.",
-            "Partial disruption — delays, reduced service, or planned closure with shuttle.",
-            "Major unplanned disruption — full or multi-segment suspension.",
-        ]
-        disruption_lines = []
-        for a in (unplanned_no_svc or unplanned_delays or shuttle_running or planned_no_svc)[:3]:
-            disruption_lines.append(a.get("title", a.get("headerText", ""))[:120])
-        disruption_detail = " | ".join(disruption_lines) if disruption_lines else ""
-
-        notes = (
-            f"TTC subway: {severity_labels[severity]} "
-            f"{len(subway_alerts)} subway alert(s) active "
-            f"({len(unplanned)} unplanned, {len(planned)} planned). "
-            + (f"Key alert: {disruption_detail} " if disruption_detail else "")
-            + f"API last updated: {last_updated[:16]}. "
-            f"Lines 1–4 (Yonge-University, Bloor-Danforth, Scarborough, Sheppard). "
-            f"~1.7M weekly riders. Unplanned Line 1/2 suspension = Tier-1 mobility event. "
-            f"Source: alerts.ttc.ca/api/alerts/live-alerts"
-        )
-
-        result = _ok("TTC Subway Service Status", severity, "",
-                     SOURCE_LABEL, DISPLAY_URL, str(date.today()), notes)
-        if severity == 2:
-            result["status"] = "alert"
-            result["threshold_note"] = "Unplanned subway suspension — major service disruption"
-        elif severity == 1:
-            result["status"] = "warn"
-            result["threshold_note"] = "Subway disruption — delays, reduced service, or planned closure"
-
-        results_out = [result]
-        if alert_count > 0:
-            results_out.append(
-                _ok("TTC Active Service Alerts", alert_count, "unplanned alerts",
-                    SOURCE_LABEL, DISPLAY_URL, str(date.today()),
-                    f"{alert_count} unplanned subway alert(s). "
-                    f"Check ttc.ca/service-advisories/all-service-alerts for detail.")
-            )
-            if alert_count > 0:
-                results_out[-1]["status"] = "warn" if severity < 2 else "alert"
-
-        return results_out
-
-    except (requests.RequestException, ValueError, KeyError) as e:
-        pass  # Fall through to GTFS-RT
-
-    # ── Fallback: GTFS-RT protobuf ─────────────────────────────────────────────
-    SUSPENSION_KW = ["no service", "suspended", "suspension", "shut down",
-                     "closed", "closure", "out of service"]
-    DISRUPTION_KW = ["delay", "reduced speed", "shuttle bus", "shuttle buses",
-                     "diversion", "bypassing", "reduced service"]
-    LINE_KW       = ["line 1", "line 2", "line 3", "line 4",
-                     "yonge", "university", "bloor", "danforth",
-                     "scarborough", "sheppard", "subway"]
-
-    try:
-        r = SESSION.get(GTFS_RT_URL, timeout=TIMEOUT)
-        r.raise_for_status()
-        try:
-            from google.transit import gtfs_realtime_pb2
-            feed = gtfs_realtime_pb2.FeedMessage()
-            feed.ParseFromString(r.content)
-            texts = []
-            for entity in feed.entity:
-                if entity.HasField("alert"):
-                    for tr in entity.alert.header_text.translation:
-                        if tr.text: texts.append(tr.text)
-        except ImportError:
-            texts = [r.content.decode("utf-8", errors="replace")]
-
-        subway_texts = [t for t in texts if any(k in t.lower() for k in LINE_KW)]
-        if any(any(k in t.lower() for k in SUSPENSION_KW) for t in subway_texts):
-            severity = 2
-        elif any(any(k in t.lower() for k in DISRUPTION_KW) for t in subway_texts):
-            severity = 1
-        else:
-            severity = 0
-
-        severity_labels = ["Normal service.", "Partial disruption.", "Major disruption."]
-        result = _ok("TTC Subway Service Status", severity, "",
-                     "TTC — bustime.ttc.ca/gtfsrt/alerts", DISPLAY_URL,
-                     str(date.today()),
-                     f"TTC subway: {severity_labels[severity]} Source: GTFS-RT fallback.")
-        if severity == 2:
-            result["status"] = "alert"
-            result["threshold_note"] = "Unplanned subway suspension — major service disruption"
-        elif severity == 1:
-            result["status"] = "warn"
-            result["threshold_note"] = "Subway disruption detected via GTFS-RT"
-        return [result]
-
     except Exception as e:
         return [_err("TTC Subway Service Status", SOURCE_LABEL, DISPLAY_URL, str(e))]
+
+    last_updated = data.get("lastUpdated", "")
+
+    # ── Freshness check ───────────────────────────────────────────────────────
+    data_age_hours = None
+    is_stale = False
+    age_str = "unknown"
+    if last_updated:
+        try:
+            lu_dt = datetime.strptime(last_updated[:19], "%Y-%m-%dT%H:%M:%S")
+            data_age_hours = (datetime.utcnow() - lu_dt).total_seconds() / 3600
+            is_stale = data_age_hours > MAX_STALE_HOURS
+            age_str = f"{data_age_hours:.1f}h"
+        except (ValueError, TypeError):
+            is_stale = True
+
+    if is_stale:
+        notes = (
+            f"TTC alerts API data is {age_str} old (threshold: {MAX_STALE_HOURS}h). "
+            f"Status unverifiable — may not reflect active incidents. "
+            f"API last updated: {last_updated[:16]}. "
+            f"Check ttc.ca/service-advisories/all-service-alerts directly."
+        )
+        result = _ok("TTC Subway Service Status", None, "",
+                     SOURCE_LABEL, DISPLAY_URL, str(date.today()), notes)
+        result["status"] = "warn"
+        result["value"] = None
+        result["threshold_note"] = (f"TTC alerts API stale ({age_str}) — "
+                                    f"check ttc.ca directly")
+        return [result]
+
+    # ── Filter to subway Lines 1–4 only ──────────────────────────────────────
+    # routeType field is unreliable (Route 6 bus appears as Subway in some records).
+    # Route numbers 1–4 are definitively subway lines.
+    subway_alerts = [
+        a for a in data.get("routes", [])
+        if str(a.get("route", "")) in SUBWAY_ROUTES
+    ]
+
+    # ── Classify disruption signals ───────────────────────────────────────────
+    shuttle_running = [
+        a for a in subway_alerts
+        if str(a.get("shuttleType", "")).strip().lower() == "running"
+    ]
+    unplanned_no_svc = [
+        a for a in subway_alerts
+        if str(a.get("alertType", "")).lower() == "unplanned"
+        and str(a.get("effect", "")).upper() == "NO_SERVICE"
+    ]
+    unplanned_delays = [
+        a for a in subway_alerts
+        if str(a.get("alertType", "")).lower() == "unplanned"
+        and str(a.get("effect", "")).upper() in
+        ("REDUCED_SERVICE", "SIGNIFICANT_DELAYS", "DETOUR")
+    ]
+    planned_no_svc = [
+        a for a in subway_alerts
+        if str(a.get("alertType", "")).lower() == "planned"
+        and str(a.get("effect", "")).upper() == "NO_SERVICE"
+    ]
+
+    # Score severity — unplanned NO_SERVICE is the only true alert(2) condition.
+    # Everything else with an active signal is warn(1).
+    if unplanned_no_svc:
+        severity = 2
+        trigger  = unplanned_no_svc
+        trigger_label = "Unplanned suspension"
+    elif shuttle_running or unplanned_delays or planned_no_svc:
+        severity = 1
+        trigger  = shuttle_running or unplanned_delays or planned_no_svc
+        trigger_label = ("Shuttle buses operating" if shuttle_running
+                         else "Disruption or planned closure")
+    else:
+        severity = 0
+        trigger  = []
+        trigger_label = "Normal service"
+
+    # ── Build output ──────────────────────────────────────────────────────────
+    sev_labels = [
+        "Normal service on all subway lines.",
+        "Disruption — delays, reduced service, shuttle buses operating, or planned closure.",
+        "Major unplanned disruption — full or multi-segment suspension.",
+    ]
+    unplanned_count = len([a for a in subway_alerts
+                           if str(a.get("alertType", "")).lower() == "unplanned"])
+    planned_count   = len(subway_alerts) - unplanned_count
+
+    # Key alert titles — prefer active disruptions over resolution notices
+    active_trigger = [a for a in trigger
+                      if str(a.get("effect", "")).upper() != "NO_EFFECT"]
+    title_pool = active_trigger if active_trigger else trigger
+    key_titles = [a.get("title", "")[:100] for a in title_pool[:3] if a.get("title")]
+    title_str  = " | ".join(key_titles)
+
+    notes = (
+        f"TTC subway: {sev_labels[severity]} "
+        f"{len(subway_alerts)} subway alert(s) "
+        f"({unplanned_count} unplanned, {planned_count} planned). "
+        + (f"Key: {title_str} " if title_str else "")
+        + f"API updated: {last_updated[:16]} ({age_str} ago). "
+        f"Lines 1–4 (Yonge-University, Bloor-Danforth, Scarborough, Sheppard). "
+        f"~1.7M weekly riders. Unplanned Line 1/2 suspension = Tier-1 mobility event."
+    )
+
+    result = _ok("TTC Subway Service Status", severity, "",
+                 SOURCE_LABEL, DISPLAY_URL, str(date.today()), notes)
+    if severity == 2:
+        result["status"] = "alert"
+        result["threshold_note"] = "Unplanned subway suspension — major disruption"
+    elif severity == 1:
+        result["status"] = "warn"
+        result["threshold_note"] = (
+            f"{trigger_label} — check ttc.ca/service-advisories")
+
+    results_out = [result]
+
+    # Secondary indicator: unplanned alert count
+    if unplanned_count > 0:
+        ac = _ok("TTC Active Service Alerts", unplanned_count, "unplanned alerts",
+                 SOURCE_LABEL, DISPLAY_URL, str(date.today()),
+                 f"{unplanned_count} unplanned subway alert(s). "
+                 f"Check ttc.ca/service-advisories/all-service-alerts.")
+        ac["status"] = "warn" if severity < 2 else "alert"
+        results_out.append(ac)
+
+    return results_out
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3574,8 +3286,7 @@ def check_network_connectivity():
         "www.cer-rec.gc.ca":                        "CER TransCanada Mainline data",
         "www.gotransit.com":                        "GO Transit service alerts",
         "www.ttc.ca":                               "TTC service advisories",
-        "alerts.ttc.ca":                            "TTC live alerts API (primary)",
-        "bustime.ttc.ca":                           "TTC GTFS-RT alerts feed (fallback)",
+        "alerts.ttc.ca":                            "TTC live alerts API",
         "www.viarail.ca":                           "VIA Rail corridor status",
         "www.cn.ca":                                "CN Rail labour risk",
         "www.cpkcr.com":                            "CPKC labour risk",
