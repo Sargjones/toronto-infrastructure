@@ -2788,271 +2788,287 @@ def fetch_enbridge_operational_status():
     """
     Enbridge Gas — Dawn Hub operational status and path constraints.
     Source: enbridgegas.com/storage-transportation/operational-information/operational-status
-    Traffic light system updated daily with 4-day outlook per path.
 
-    Three states per path:
-      0 = No capacity constraints (green)
-      1 = Interruptible services potentially impacted (yellow)
-      2 = Firm services impacted (red)
+    Fully validated via Thonny (2026-04-11). Sitecore CMS, static HTML — no JS required.
+    Three independent signals parsed; overall severity = max across all three.
 
-    Key paths for GTA supply resilience:
-      - Dawn to Parkway (primary GTA gas supply corridor)
-      - Panhandle (western supply into Dawn)
-      - Kirkwall (eastern Ontario distribution)
+    Signal 1 — S&T Notice block (grey-blocks div with <ol>):
+      Appears ONLY when Storage & Transportation path constraints are active.
+      Contains affected path names (Dawn→Parkway, Kirkwall etc.).
+      Severity from notice text: "firm services impacted"=2, "interruptible"=1.
+      This is the most important signal for GTA supply resilience.
 
-    Page is partially server-side rendered via Sitecore CMS.
-    If JavaScript rendering blocks scrape, returns manual with URL.
+    Signal 2 — ug-banner class on distribution area summary rows:
+      ug-banner-success → green (0), ug-banner-warning → yellow (1),
+      ug-banner-danger  → red (2).
+
+    Signal 3 — td.traffic-signal colour class in distributionServiceArea table:
+      4-day outlook for regional distribution areas (Sudbury-Timmins etc.).
+      CSS class directly on <td>: green / yellow / red.
+      76 path-days typical (19 areas × 4 days) when all-clear.
     """
-    URL = ("https://www.enbridgegas.com/storage-transportation/"
-           "operational-information/operational-status")
+    URL    = ("https://www.enbridgegas.com/storage-transportation/"
+              "operational-information/operational-status")
+    SOURCE = "Enbridge Gas — operational-status"
+
     try:
         r = SESSION.get(URL, timeout=TIMEOUT,
                         headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.10",
                                  "Accept": "text/html,application/xhtml+xml"})
         r.raise_for_status()
     except requests.RequestException as e:
-        return [_err("Enbridge Dawn System Status",
-                     "Enbridge Gas — operational-status", URL, str(e))]
+        return [_err("Enbridge Dawn System Status", SOURCE, URL, str(e))]
 
     try:
         soup = BeautifulSoup(r.content, "html.parser")
-        text = soup.get_text(" ", strip=True).lower()
+        severity = 0
+        signals  = []
 
-        # Check whether meaningful content came back (not just nav shell)
-        # The page has distinctive operational text when rendered
-        has_content = any(k in text for k in [
-            "no capacity constraints",
-            "interruptible services",
-            "firm services impacted",
-            "dawn to parkway",
-            "capacity constraints",
-            "operational status",
-            "path",
-        ])
+        # ── Signal 1: S&T notice block ────────────────────────────────────────
+        notice_paths = []
+        notice_sev   = 0
+        for div in soup.find_all("div", class_=lambda c: c and "grey-blocks" in c):
+            ol = div.find("ol")
+            if not ol:
+                continue
+            items = [li.get_text(" ", strip=True) for li in ol.find_all("li")]
+            if not items:
+                continue
+            notice_paths = items
+            full_text = div.get_text(" ", strip=True).lower()
+            if "firm services impacted" in full_text:
+                notice_sev = 2
+            elif "interruptible" in full_text:
+                notice_sev = 1
+            else:
+                notice_sev = 1  # any active notice = at least warn
+            break
 
-        if not has_content or len(text) < 500:
+        if notice_paths:
+            severity = max(severity, notice_sev)
+            signals.append(f"S&T notice (sev={notice_sev}): "
+                           + "; ".join(notice_paths[:3]))
+
+        # ── Signal 2: ug-banner class variants ───────────────────────────────
+        banner_sev = 0
+        for td in soup.find_all("td", class_=lambda c: c and "ug-banner" in c):
+            cls = td.get("class", [])
+            if "ug-banner-danger"  in cls: banner_sev = max(banner_sev, 2)
+            if "ug-banner-warning" in cls: banner_sev = max(banner_sev, 1)
+        if banner_sev > 0:
+            severity = max(severity, banner_sev)
+            signals.append(f"Banner signal sev={banner_sev}")
+
+        # ── Signal 3: td.traffic-signal colour class ──────────────────────────
+        signal_tds   = soup.find_all("td", class_="traffic-signal")
+        red_count    = sum(1 for td in signal_tds if "red"    in td.get("class", []))
+        yellow_count = sum(1 for td in signal_tds if "yellow" in td.get("class", []))
+        green_count  = sum(1 for td in signal_tds if "green"  in td.get("class", []))
+        total_paths  = red_count + yellow_count + green_count
+
+        td_sev = 2 if red_count else (1 if yellow_count else 0)
+        if td_sev > 0:
+            severity = max(severity, td_sev)
+            signals.append(f"Traffic signal TDs sev={td_sev} "
+                           f"({green_count}G/{yellow_count}Y/{red_count}R)")
+        elif total_paths > 0:
+            signals.append(f"Traffic signal TDs: {total_paths} all-green")
+
+        # ── Sanity check ─────────────────────────────────────────────────────
+        if total_paths == 0 and not notice_paths and banner_sev == 0:
             return [_manual(
-                "Enbridge Dawn System Status",
-                "Enbridge Gas — operational-status page",
-                "Page requires JavaScript rendering — not parseable via static fetch. "
-                "Manual check: enbridgegas.com/storage-transportation/operational-information/operational-status "
-                "Traffic light states: Green=No constraints, Yellow=Interruptible impacted, Red=Firm services impacted. "
-                "Key path to check: Dawn to Parkway (primary GTA supply corridor).",
+                "Enbridge Dawn System Status", SOURCE,
+                "Page returned no parseable status data — possible structure change. "
+                f"Manual check: {URL} "
+                "States: Green=No constraints, Yellow=Interruptible impacted, "
+                "Red=Firm services impacted. Key path: Dawn→Parkway (GTA supply).",
                 sector="energy"
             )]
 
-        # The Enbridge operational status page is fully JavaScript-rendered.
-        # Static HTTP fetch returns only the navigation shell — no traffic light data.
-        # Return baseline ok (0 = no known constraint) with a note directing manual check.
-        # This is the correct default: constraints are the exception, not the rule.
-        return [_ok("Enbridge Dawn System Status", 0, "",
-                    "Enbridge Gas — operational-status (baseline)", URL,
-                    str(date.today()),
-                    "Tier 2 — Continental supply chain. "
-                    "Baseline: no active constraint detected (page requires JS to confirm). "
-                    "Manual verification: enbridgegas.com/storage-transportation/operational-information/operational-status "
-                    "Three states: Green=No constraints, Yellow=Interruptible impacted, Red=Firm services impacted. "
-                    "Key path for GTA: Dawn to Parkway. "
-                    "Subscribe to Enbridge email alerts for push notifications on path constraints.")]
+        # ── Last updated ──────────────────────────────────────────────────────
+        page_text  = soup.get_text(" ", strip=True)
+        date_match = re.search(
+            r"Last Updated[:\s]+([A-Za-z]+ \d{1,2},?\s*\d{4})", page_text)
+        last_updated = date_match.group(1) if date_match else "unknown"
+
+        # ── Build result ──────────────────────────────────────────────────────
+        sev_labels = [
+            "No capacity constraints on all monitored paths.",
+            "Interruptible services potentially impacted on one or more paths.",
+            "Firm services impacted — active constraint on one or more paths.",
+        ]
+        path_note = (f"Affected S&T paths: {'; '.join(notice_paths)} "
+                     if notice_paths else "")
+        dist_note = (f"Distribution areas: {green_count}G/{yellow_count}Y/{red_count}R "
+                     f"across {total_paths} path-days (4-day outlook). "
+                     if total_paths else "")
+
+        notes = (
+            f"Enbridge Dawn: {sev_labels[severity]} "
+            f"{path_note}{dist_note}"
+            f"Last updated: {last_updated}. "
+            f"Key S&T paths for GTA supply: Dawn\u2192Parkway (primary corridor), "
+            f"Dawn\u2192Kirkwall, Kirkwall\u2192Parkway. "
+            f"States: Green=No constraints, Yellow=Interruptible impacted, "
+            f"Red=Firm services impacted. "
+            f"Signals: {'; '.join(signals) if signals else 'all clear'}."
+        )
+
+        result = _ok("Enbridge Dawn System Status", severity, "",
+                     SOURCE, URL, str(date.today()), notes)
+        if severity == 2:
+            result["status"] = "alert"
+            result["threshold_note"] = ("Firm services impacted on Dawn system — "
+                                        "GTA gas supply constraint active")
+        elif severity == 1:
+            result["status"] = "warn"
+            result["threshold_note"] = ("Interruptible services potentially impacted "
+                                        "on Dawn system")
+        return [result]
 
     except Exception as e:
-        return [_err("Enbridge Dawn System Status",
-                     "Enbridge Gas — operational-status", URL, str(e))]
-
+        return [_err("Enbridge Dawn System Status", SOURCE, URL, str(e))]
 
 def fetch_dawn_storage_level():
     """
     Dawn + Tecumseh gas storage level — aggregate Ontario underground storage.
-    Dawn Hub (Enbridge Gas, near Sarnia) is Canada's largest integrated underground
-    storage facility at ~284 Bcf working capacity across 33 pools.
-    Tecumseh pools are linked to Dawn; Enbridge reports them as aggregate.
 
-    Sources tried in order:
-      1. Enbridge Gas Storage Inventory Report page — twice-monthly, scrape for
-         aggregate volume figure (Bcf). Page may require JS rendering.
-      2. StatsCan WDS API — Table 25-10-0063-01, Ontario gas storage vectors.
-         Multiple vector fallbacks (v65201762 was returning 0.0 in earlier versions;
-         this version tries confirmed working vectors).
-      3. Manual placeholder with Enbridge URL.
+    Source: enbridgegas.com/storage-transportation/operational-information/storage-reporting
+    Published twice monthly. Page contains static HTML tables — no JS rendering required.
 
-    Thresholds (% of ~284 Bcf working capacity):
-      Warn: <150 Bcf entering winter (Oct-Nov) — below 53% = reduced winter buffer
-      Alert: <100 Bcf — critically low, supply stress risk for Ontario
+    Confirmed table structure (validated via Thonny 2026-04-11):
+      - Tables 1 & 4: Design Capacity (static reference — ignored)
+      - Tables 2 & 5: Inventory period 1 (older)  ← deduplicated
+      - Tables 3 & 6: Inventory period 2 (recent)  ← most recent
+      Tables are duplicated (desktop + mobile layout). Deduplicated by value.
+
+    Working capacity confirmed: 314.8 PJ (Dawn 186.9 + Tecumseh 128.3 PJ working gas).
+    Unit: PJ (petajoules). Conversion: 1 PJ = 0.9478 Bcf (≈ 0.948).
+
+    Seasonal thresholds:
+      Injection season (Apr–Sep): post-winter withdrawal, low levels are normal.
+        Warn:  < 63 PJ (< 20% capacity) — unusually low even for spring
+        Alert: < 32 PJ (< 10% capacity) — emergency depletion
+      Withdrawal season (Oct–Mar): pre/during winter, buffer is critical.
+        Warn:  < 142 PJ (< 45% capacity) — reduced winter buffer
+        Alert: <  94 PJ (< 30% capacity) — critical supply risk for Ontario
+
+    StatsCan vectors v65201762 and v65201768 are DEAD (404) as of 2026-04-11.
+    This function uses direct page scrape only. No StatsCan fallback.
     """
-    CAPACITY_BCF = 284.0  # Dawn + Tecumseh approximate working capacity
+    URL = ("https://www.enbridgegas.com/storage-transportation/"
+           "operational-information/storage-reporting")
+    SOURCE = "Enbridge Gas Storage Inventory Report"
+    WORKING_CAPACITY_PJ = 314.8   # Dawn 186.9 + Tecumseh 128.3 PJ
 
-    # ── Source 1: Enbridge Storage Inventory Report page ─────────────────────
-    ENBRIDGE_URL = ("https://www.enbridgegas.com/storage-transportation/"
-                    "operational-information/storage-reporting")
     try:
-        r = SESSION.get(ENBRIDGE_URL, timeout=TIMEOUT,
+        r = SESSION.get(URL, timeout=TIMEOUT,
                         headers={"User-Agent": "Mozilla/5.0 TII-Scraper/2.10"})
         r.raise_for_status()
         soup = BeautifulSoup(r.content, "html.parser")
-        text = soup.get_text(" ", strip=True)
 
-        # Look for volume figures — storage inventory values in Bcf or PJ
-        # Typical format: "283.5 Bcf" or "298 Bcf" in the rendered table
-        import re as _re
-        # Try Bcf pattern first
-        bcf_matches = _re.findall(r"([0-9]{1,3}(?:[.][0-9]+)?)[\s]*[Bb][Cc][Ff]", text)
-        if bcf_matches:
-            # Filter to plausible storage range (50-350 Bcf)
-            plausible = [float(v) for v in bcf_matches if 50 <= float(v) <= 350]
-            if plausible:
-                # Take the largest value — likely total storage, not single pool
-                storage_bcf = max(plausible)
-                pct_capacity = round(storage_bcf / CAPACITY_BCF * 100, 1)
-                return [_ok("Dawn Hub Gas Storage (Ontario)", storage_bcf, "Bcf",
-                            "Enbridge Gas Storage Inventory Report", ENBRIDGE_URL,
-                            str(date.today()),
-                            f"Aggregate Dawn + Tecumseh storage: {storage_bcf} Bcf "
-                            f"({pct_capacity}% of ~{CAPACITY_BCF:.0f} Bcf working capacity). "
-                            f"Enbridge publishes twice monthly. "
-                            f"Tier 2 — Continental supply chain buffer for Ontario gas supply. "
-                            f"Warn: <150 Bcf entering winter (53% capacity). "
-                            f"Alert: <100 Bcf (35% — critical winter supply risk)."
-                            )]
-    except Exception:
-        pass
-
-    # ── Source 2: StatsCan WDS API — Ontario gas storage ─────────────────────
-    # Table 25-10-0063-01: Supply and disposition of natural gas, by province
-    # Ontario storage withdrawal/injection vectors
-    # v65201762 previously returned 0.0 — likely "net withdrawals" not inventory
-    # Trying inventory/stock-type vectors for Ontario
-    WDS_URL = "https://www150.statcan.gc.ca/t1/wds/rest/getDataFromVectorsAndLatestNPeriods"
-    # These vectors are candidates for Ontario natural gas in storage (inventory stock)
-    # Table 25-10-0063-01, coordinate patterns for Ontario storage
-    STORAGE_VECTORS = [
-        (65201762, "Ontario gas storage (v65201762)"),
-        (65201768, "Ontario gas storage stock (v65201768)"),
-        (65201774, "Ontario gas in storage end-of-period (v65201774)"),
-        (65201780, "Ontario net gas storage change (v65201780)"),
-    ]
-    try:
-        payload = [{"vectorId": vid, "latestN": 3} for vid, _ in STORAGE_VECTORS]
-        r = SESSION.post(WDS_URL, json=payload, timeout=30)
-        r.raise_for_status()
-        data = r.json()
-
-        for item, (vid, vlabel) in zip(data, STORAGE_VECTORS):
-            if item.get("status") != "SUCCESS":
+        # ── Find inventory tables only ────────────────────────────────────────
+        # Target: tables whose header row contains "Working Storage Inventory"
+        # Skip: Design Capacity tables (header contains "Working Gas Capacity")
+        inventory_values_pj = []
+        for table in soup.find_all("table"):
+            header_row = table.find("tr")
+            if not header_row:
                 continue
-            points = item.get("object", {}).get("vectorDataPoint", [])
-            if not points:
-                continue
-            # Find latest non-zero, non-null value
-            for pt in reversed(points):
-                try:
-                    val = float(pt["value"])
-                    if val <= 0:   # zero = net-change vector, not stock; skip
-                        continue
-                    ref = pt.get("refPer", "unknown")
-                    # StatsCan gas storage is in millions of cubic metres (Mm3)
-                    # Convert to Bcf: 1 Mm3 = 0.03531 Bcf
-                    bcf = round(val * 0.03531, 1)
-                    pct = round(bcf / CAPACITY_BCF * 100, 1) if bcf < 400 else None
-                    if bcf > 400:
-                        # Might already be in Bcf or different unit — report raw
-                        return [_ok("Dawn Hub Gas Storage (Ontario)", round(val, 1),
-                                    "Mm3 (StatsCan)",
-                                    f"StatsCan WDS — {vlabel}", WDS_URL, ref,
-                                    f"StatsCan vector v{vid}. Value in million cubic metres. "
-                                    f"1 Mm3 = 0.035 Bcf. Capacity ref: ~{CAPACITY_BCF:.0f} Bcf. "
-                                    f"Warn: <150 Bcf entering winter."
-                                    )]
-                    return [_ok("Dawn Hub Gas Storage (Ontario)", bcf, "Bcf (est.)",
-                                f"StatsCan WDS — {vlabel}", WDS_URL, ref,
-                                f"StatsCan vector v{vid}, converted from {val:.0f} Mm3. "
-                                f"{f'{pct}% of ~{CAPACITY_BCF:.0f} Bcf working capacity. ' if pct else ''}"
-                                f"Tier 2 — Continental supply chain buffer. "
-                                f"Warn: <150 Bcf entering winter. Alert: <100 Bcf."
-                                )]
-                except (ValueError, TypeError, KeyError):
+            header_text = header_row.get_text(" ", strip=True)
+            if "Working Storage Inventory" not in header_text:
+                continue  # skip design capacity tables
+
+            # Find the Total row
+            for row in table.find_all("tr")[1:]:
+                cells = [c.get_text(strip=True) for c in row.find_all(["th", "td"])]
+                if not cells or cells[0].strip().lower() != "total":
                     continue
-    except Exception:
-        pass
+                if len(cells) < 2:
+                    continue
+                try:
+                    val_pj = float(cells[1].replace(",", "").strip())
+                    if 5 < val_pj < 400:   # plausible PJ range for Ontario storage
+                        inventory_values_pj.append(val_pj)
+                except (ValueError, IndexError):
+                    continue
 
-    # ── Source 3: Manual fallback ─────────────────────────────────────────────
-    return [_manual(
-        "Dawn Hub Gas Storage (Ontario)",
-        "Enbridge Gas Storage Inventory Report",
-        "Automated fetch failed (page likely JS-rendered). "
-        "Manual retrieval: enbridgegas.com/storage-transportation/operational-information/storage-reporting "
-        "-> Storage Inventory Report (published twice monthly). "
-        "Look for aggregate Dawn + Tecumseh volume in Bcf. "
-        "Capacity: ~284 Bcf working capacity. "
-        "Warn threshold: <150 Bcf entering winter (Oct). Alert: <100 Bcf. "
-        "Also available via CER market snapshots: cer-rec.gc.ca/en/data-analysis/energy-markets/market-snapshots/",
-        sector="energy"
-    )]
+        if not inventory_values_pj:
+            return [_manual(
+                "Dawn Hub Gas Storage (Ontario)",
+                SOURCE,
+                f"Could not parse inventory tables from {URL} — "
+                "page structure may have changed. "
+                "Manual check: enbridgegas.com storage-reporting page. "
+                "Working capacity: 314.8 PJ (Dawn + Tecumseh).",
+                sector="energy"
+            )]
 
+        # Deduplicate (page duplicates tables for desktop + mobile)
+        seen = set()
+        unique_pj = []
+        for v in inventory_values_pj:
+            if v not in seen:
+                seen.add(v)
+                unique_pj.append(v)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# MANUAL PLACEHOLDERS
-# ══════════════════════════════════════════════════════════════════════════════
+        # Most recent = last unique value (tables appear in chronological order)
+        most_recent_pj = unique_pj[-1]
+        val_bcf = round(most_recent_pj * 0.9478, 1)
+        pct_working = round(most_recent_pj / WORKING_CAPACITY_PJ * 100, 1)
 
-def get_manual_placeholders():
-    return [
-        _manual("Toronto Hydro Active Outages",
-                "Toronto Hydro Outage Map (KUBRA StormCenter)",
-                "KUBRA StormCenter API confirmed but data endpoints require auth. "
-                "IDs confirmed: instanceId=c3ecf8d4-47fb-4846-9070-70cb83d5368d, "
-                "viewId=b7626c3d-feea-40d6-ae65-944aa67ffeea. "
-                "Manual: outagemap.torontohydro.com — updated every 10 min. "
-                "Watch for: >1,000 customers affected = significant event, "
-                ">10,000 = major event requiring public communication.",
-                sector="energy"),
-        _manual("Grid Reserve Margin", "IESO Reliability Outlook (quarterly PDF)",
-                "ieso.ca → Planning and Forecasting → Reliability Outlook → latest PDF. "
-                "Find 'Reserve Above Requirement' figure. Update quarterly.",
-                sector="energy"),
-        _manual("WWTP ECA Compliance", "City of Toronto WWTP Annual Reports (annual PDF)",
-                "toronto.ca WWTP reports → download all 4 plant PDFs (~March 31). "
-                "Section B = ECA compliance table.",
-                sector="water"),
-        _manual("O-Neg Blood Supply", "Canadian Blood Services",
-                "No public API. blood.ca for status. Contact media@blood.ca.",
-                sector="health"),
-        _manual("Food Bank Demand Index", "Daily Bread Food Bank (quarterly PDF)",
-                "dailybread.ca/research-and-advocacy/ → quarterly reports.",
-                sector="food"),
-        _manual("LTB Eviction Filings", "LTB Quarterly Statistics PDF",
-                "tribunalsontario.ca/ltb/resources/ → Statistics PDF.",
-                sector="financial"),
-        _manual("Lake Ontario Source Quality", "Toronto Water Source Monitoring Reports",
-                "toronto.ca/services-payments/water-environment/water-treatment/"
-                "drinking-water-quality-monitoring-reports/",
-                sector="water"),
-        _manual("Port of Montreal Container Dwell Time",
-                "Port of Montreal — Year in Review (annual PDF)",
-                "Dwell time published annually in Year in Review report. "
-                "port-montreal.com/en/trading-with-the-world-YYYY "
-                "2023 import-rail dwell: 3.7 days. No free real-time API. "
-                "TEU throughput now automated via fetch_port_of_montreal().",
-                sector="transport_logistics"),
-        _manual("TPS Counter-Terrorism Posture",
-                "Toronto Police Service — CTSU announcements",
-                "Manual update required. Scale: 0=CTSU established, standard intel ops; "
-                "1=Task Force Guardian active, high-visibility armed deployments at key sites; "
-                "2=Active incident response or elevated threat advisory. "
-                "Current status (Mar 24 2026): 1 — Task Force Guardian launched, armed officers "
-                "deployed at places of worship, tourist hubs, critical infrastructure. "
-                "Source: tps.ca/media-centre/news-releases/65502/ "
-                "Update when TPS issues new operational announcements.",
-                sector="public_safety"),
-        _manual("Task Force Guardian Deployments (YTD)",
-                "Toronto Police Service — Task Force Guardian",
-                "Manual update required. Count of discrete Task Force Guardian activations "
-                "year-to-date. Used for annual trend analysis — rising count = escalating or "
-                "sustained threat environment; declining count = normalization. "
-                "Current value (Mar 2026): 1 (initial deployment, Mar 24 2026). "
-                "Increment when TPS announces new or expanded deployments. "
-                "Reset to 0 each January 1. "
-                "Source: tps.ca/media-centre/",
-                sector="public_safety"),
-    ]
+        # ── Seasonal thresholds ───────────────────────────────────────────────
+        month = date.today().month
+        is_injection = 4 <= month <= 9   # Apr–Sep
+
+        if is_injection:
+            warn_pj, alert_pj = 63.0, 32.0
+            season_note = "injection season (Apr–Sep) — post-winter refill underway"
+        else:
+            warn_pj, alert_pj = 142.0, 94.0
+            season_note = "withdrawal season (Oct–Mar) — winter supply buffer critical"
+
+        # Represent older period if two unique values found
+        prev_note = ""
+        if len(unique_pj) >= 2:
+            prev_pj  = unique_pj[-2]
+            prev_bcf = round(prev_pj * 0.9478, 1)
+            delta    = round(most_recent_pj - prev_pj, 1)
+            direction = "▲ injecting" if delta > 0 else "▼ withdrawing" if delta < 0 else "→ flat"
+            prev_note = (f"Previous period: {prev_pj:.0f} PJ ({prev_bcf} Bcf). "
+                         f"Change: {delta:+.0f} PJ ({direction}). ")
+
+        notes = (
+            f"Dawn + Tecumseh working storage: {most_recent_pj:.0f} PJ "
+            f"({val_bcf} Bcf, {pct_working}% of {WORKING_CAPACITY_PJ:.0f} PJ working capacity). "
+            f"{prev_note}"
+            f"Season: {season_note}. "
+            f"Thresholds — Warn: <{warn_pj:.0f} PJ, Alert: <{alert_pj:.0f} PJ. "
+            f"Ontario gas supply chain: Brent crude (Tier 1) → TCPL pipelines (Tier 2) → "
+            f"Dawn storage + Enbridge distribution (Tier 2) → GTA consumers (Tier 3). "
+            f"Dawn is Canada's largest integrated underground storage facility (~33 pools). "
+            f"Published twice monthly. Source: {URL}"
+        )
+
+        result = _ok("Dawn Hub Gas Storage (Ontario)", most_recent_pj, "PJ",
+                     SOURCE, URL, str(date.today()), notes)
+
+        if most_recent_pj <= alert_pj:
+            result["status"] = "alert"
+            result["threshold_note"] = (
+                f"Storage critically low — {most_recent_pj:.0f} PJ "
+                f"({pct_working}% capacity, {season_note})")
+        elif most_recent_pj <= warn_pj:
+            result["status"] = "warn"
+            result["threshold_note"] = (
+                f"Storage below seasonal warn threshold — {most_recent_pj:.0f} PJ "
+                f"({pct_working}% capacity, {season_note})")
+
+        return [result]
+
+    except Exception as e:
+        return [_err("Dawn Hub Gas Storage (Ontario)", SOURCE, URL, str(e))]
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
