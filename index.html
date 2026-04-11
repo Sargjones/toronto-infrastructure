@@ -1222,6 +1222,9 @@ async function loadBrief(isAlert) {
 
 
 function renderTriageCards(results) {
+  function escHtml(s) {
+    return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
   const wrap = document.getElementById("triage-wrap");
   if(!wrap) return;
   const SUSTAINED_DAYS = 14;
