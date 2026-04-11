@@ -3300,7 +3300,8 @@ def fetch_tps_staffing_by_command():
 SECTOR_SCRAPERS = {
     "energy":      [fetch_ieso_generation_mix, fetch_ieso_ontario_demand,
                     fetch_tcpl_mainline, fetch_brent_crude,
-                    fetch_enbridge_operational_status, fetch_dawn_storage_level],
+                    fetch_enbridge_operational_status, fetch_dawn_storage_level,
+                    fetch_toronto_fuel_price],
     "water":       [fetch_active_water_outages, fetch_toronto_boil_advisories],
     "health":      [fetch_ontario_er_capacity, fetch_phac_wastewater,
                     fetch_ontario_icu_occupancy, fetch_toronto_shelter],
@@ -3312,7 +3313,7 @@ SECTOR_SCRAPERS = {
                              fetch_port_of_montreal],
     "environment": [fetch_toronto_aqhi],
     "financial":   [fetch_bank_of_canada_rate, fetch_cad_usd_rate,
-                    fetch_toronto_fuel_price, fetch_toronto_unemployment,
+                    fetch_toronto_unemployment,
                     fetch_trreb_market, fetch_osb_insolvency],
     "public_safety": [fetch_tps_personnel, fetch_tps_staffing_by_command],
 }
