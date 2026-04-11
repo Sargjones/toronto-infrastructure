@@ -147,12 +147,15 @@ THRESHOLDS = [
         lambda v: v >= 1,  lambda v: v >= 2,
         "Interruptible gas services potentially impacted — Dawn system constraint",
         "Firm gas services impacted — Dawn system under active constraint"),
-    # Dawn storage level (Bcf) — only fires on plausible storage values (>10 Bcf)
-    # Guards against StatsCan vectors returning 0.0 (net-change vectors, not stock)
+    # Dawn storage level (PJ) — unit changed from Bcf to PJ 2026-04-11.
+    # Working capacity: 314.8 PJ (Dawn 186.9 + Tecumseh 128.3 PJ).
+    # Seasonal thresholds applied in fetch_dawn_storage_level(); this threshold
+    # acts as a safety net for the worst-case withdrawal season scenario only.
+    # Plausibility guard: 5 < v < 400 PJ. Ignore values outside this range.
     ("Dawn Hub Gas Storage",
-        lambda v: 10 < v < 150, lambda v: 10 < v < 100,
-        "Storage below 150 Bcf — reduced winter buffer (entering withdrawal season)",
-        "Storage critically low — below 100 Bcf, supply stress risk for Ontario"),
+        lambda v: 5 < v < 142, lambda v: 5 < v < 94,
+        "Storage below 142 PJ (45% capacity) — reduced winter buffer",
+        "Storage critically low — below 94 PJ (30% capacity), supply stress risk for Ontario"),
     # Financial
     ("CAD/USD Exchange Rate",
         lambda v: v > 1.40, lambda v: v > 1.50,
@@ -3070,6 +3073,68 @@ def fetch_dawn_storage_level():
         return [_err("Dawn Hub Gas Storage (Ontario)", SOURCE, URL, str(e))]
 
 
+
+
+def get_manual_placeholders():
+    return [
+        _manual("Toronto Hydro Active Outages",
+                "Toronto Hydro Outage Map (KUBRA StormCenter)",
+                "KUBRA StormCenter API confirmed but data endpoints require auth. "
+                "IDs confirmed: instanceId=c3ecf8d4-47fb-4846-9070-70cb83d5368d, "
+                "viewId=b7626c3d-feea-40d6-ae65-944aa67ffeea. "
+                "Manual: outagemap.torontohydro.com — updated every 10 min. "
+                "Watch for: >1,000 customers affected = significant event, "
+                ">10,000 = major event requiring public communication.",
+                sector="energy"),
+        _manual("Grid Reserve Margin", "IESO Reliability Outlook (quarterly PDF)",
+                "ieso.ca → Planning and Forecasting → Reliability Outlook → latest PDF. "
+                "Find 'Reserve Above Requirement' figure. Update quarterly.",
+                sector="energy"),
+        _manual("WWTP ECA Compliance", "City of Toronto WWTP Annual Reports (annual PDF)",
+                "toronto.ca WWTP reports → download all 4 plant PDFs (~March 31). "
+                "Section B = ECA compliance table.",
+                sector="water"),
+        _manual("O-Neg Blood Supply", "Canadian Blood Services",
+                "No public API. blood.ca for status. Contact media@blood.ca.",
+                sector="health"),
+        _manual("Food Bank Demand Index", "Daily Bread Food Bank (quarterly PDF)",
+                "dailybread.ca/research-and-advocacy/ → quarterly reports.",
+                sector="food"),
+        _manual("LTB Eviction Filings", "LTB Quarterly Statistics PDF",
+                "tribunalsontario.ca/ltb/resources/ → Statistics PDF.",
+                sector="financial"),
+        _manual("Lake Ontario Source Quality", "Toronto Water Source Monitoring Reports",
+                "toronto.ca/services-payments/water-environment/water-treatment/"
+                "drinking-water-quality-monitoring-reports/",
+                sector="water"),
+        _manual("Port of Montreal Container Dwell Time",
+                "Port of Montreal — Year in Review (annual PDF)",
+                "Dwell time published annually in Year in Review report. "
+                "port-montreal.com/en/trading-with-the-world-YYYY "
+                "2023 import-rail dwell: 3.7 days. No free real-time API. "
+                "TEU throughput now automated via fetch_port_of_montreal().",
+                sector="transport_logistics"),
+        _manual("TPS Counter-Terrorism Posture",
+                "Toronto Police Service — CTSU announcements",
+                "Manual update required. Scale: 0=CTSU established, standard intel ops; "
+                "1=Task Force Guardian active, high-visibility armed deployments at key sites; "
+                "2=Active incident response or elevated threat advisory. "
+                "Current status (Mar 24 2026): 1 — Task Force Guardian launched, armed officers "
+                "deployed at places of worship, tourist hubs, critical infrastructure. "
+                "Source: tps.ca/media-centre/news-releases/65502/ "
+                "Update when TPS issues new operational announcements.",
+                sector="public_safety"),
+        _manual("Task Force Guardian Deployments (YTD)",
+                "Toronto Police Service — Task Force Guardian",
+                "Manual update required. Count of discrete Task Force Guardian activations "
+                "year-to-date. Used for annual trend analysis — rising count = escalating or "
+                "sustained threat environment; declining count = normalization. "
+                "Current value (Mar 2026): 1 (initial deployment, Mar 24 2026). "
+                "Increment when TPS announces new or expanded deployments. "
+                "Reset to 0 each January 1. "
+                "Source: tps.ca/media-centre/",
+                sector="public_safety"),
+    ]
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PUBLIC SAFETY & COST
