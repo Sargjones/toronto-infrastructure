@@ -100,17 +100,6 @@
   .pill-error  { background: var(--alert-bg);  color: var(--alert); opacity:.7; }
   .summary-date { font-size: 12px; color: var(--text3); margin-left: auto; }
 
-  .alert-banner {
-    background: var(--alert-bg);
-    border: 0.5px solid var(--alert);
-    border-radius: 8px;
-    padding: 10px 14px;
-    margin-bottom: 1.25rem;
-    font-size: 13px;
-    color: var(--alert);
-  }
-  .alert-banner strong { font-weight: 600; }
-
   .sector { margin-bottom: 1.75rem; }
   .sector-header {
     font-size: 11px; font-weight: 600; letter-spacing: .07em;
@@ -493,7 +482,6 @@
   <div id="brief-panel" style="display:none"></div>
   <div id="dashboard" style="display:none">
     <div class="summary-bar" id="summary-bar"></div>
-    <div id="alert-banners"></div>
     <div id="triage-wrap" class="triage-wrap" style="display:none"></div>
     <div class="legend">
       <span class="legend-item"><span class="legend-dot dot-ok"></span>normal</span>
@@ -1341,19 +1329,7 @@ function render(data) {
     bar.appendChild(p);
   }
 
-  const banners = document.getElementById("alert-banners");
-  banners.innerHTML = "";
-  const MUTED_INDICATORS = ["go transit"];
-  const alerts = results.filter(r =>
-    r.status === "alert" &&
-    !MUTED_INDICATORS.some(m => (r.indicator||"").toLowerCase().includes(m)));
-  if(alerts.length > 0) {
-    const b = document.createElement("div");
-    b.className = "alert-banner";
-    b.innerHTML = "<strong>Active alerts:</strong> " +
-      alerts.map(r => `${r.indicator} (${fmtValue(r)} ${r.unit||""}) — ${r.threshold_note||""}`).join(" &nbsp;·&nbsp; ");
-    banners.appendChild(b);
-  }
+
 
   const bySector = {};
   for(const r of results) {
