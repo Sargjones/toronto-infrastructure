@@ -830,103 +830,70 @@ def fetch_active_water_outages():
 def fetch_toronto_unemployment():
     """
     Toronto CMA unemployment rate — StatsCan WDS API.
-    Table 14-10-0459-01: Labour force characteristics by CMA, 3-month moving average, SA.
-    Replaced inactive table 14-10-0294-01 (superseded May 2025).
+    Table 14-10-0459-01: Labour force characteristics by CMA, monthly, SA.
 
-    The POST-based getDataFromCubePidCoordAndLatestNPeriods endpoint returns 406.
-    Using GET-based endpoint instead, then falling back to vector search.
-    Released monthly, lags ~5 weeks after reference month.
-    Alert threshold: >10% = recession-level stress.
+    Vector confirmed live via CSV download 2026-04-11:
+      v1643279334 = Toronto, Ontario | Unemployment rate | Estimate | Seasonally adjusted
+      March 2026: 8.1% (above warn threshold of 8.0%)
+
+    Fallback: v1643279335 (unadjusted) if SA vector fails.
+    Released monthly, ~5 weeks after reference month.
+    Pre-tariff baseline (2023): ~6.5%. Warn: >8%. Alert: >10%.
     """
-    # ── Source 1: GET-based coordinate endpoint (new table) ──────────────────
-    # GET format: /getDataFromCubePidCoordAndLatestNPeriods/{pid}/{coord}/{n}
-    # Toronto CMA member varies by table — try multiple coordinate patterns
-    GET_BASE = "https://www150.statcan.gc.ca/t1/wds/rest/getDataFromCubePidCoordAndLatestNPeriods"
-    coords_to_try = [
-        (1410045901, "35.3.1.1"),        # new table, Toronto, unemployment, both sexes
-        (1410045901, "35.3.1.1.1.1"),
-        (1410045901, "35.3.1.1.1.1.1.1.1.1"),
-        (14100294,   "23.5.1.1"),         # old table fallback
-    ]
-    for pid, coord in coords_to_try:
-        try:
-            url = f"{GET_BASE}/{pid}/{coord}/2"
-            r = SESSION.get(url, timeout=30,
-                            headers={"Accept": "application/json"})
-            r.raise_for_status()
-            data = r.json()
-            if not isinstance(data, list) or not data:
-                continue
-            obj = data[0].get("object", {})
-            if data[0].get("status") != "SUCCESS":
-                continue
-            points = obj.get("vectorDataPoint", [])
-            if not points:
-                continue
-            latest = points[-1]
-            rate = float(latest["value"])
-            if not (4.0 <= rate <= 20.0):   # sanity check
-                continue
-            ref = latest.get("refPer", "unknown")
-            vid = obj.get("vectorId", "?")
-            table_label = "14-10-0459-01" if pid == 1410045901 else "14-10-0294-01"
-            return [_ok("Toronto Unemployment Rate", round(rate, 1), "%",
-                        f"StatsCan LFS — Table {table_label} (Toronto CMA)",
-                        url, ref,
-                        f"3-month moving average, seasonally adjusted. Vector v{vid}. "
-                        f"Released ~5 weeks after reference month. "
-                        f"Pre-tariff baseline (2023): ~6.5%. Alert: >10%.")]
-        except Exception:
-            continue
+    WDS_URL = "https://www150.statcan.gc.ca/t1/wds/rest/getDataFromVectorsAndLatestNPeriods"
+    # Confirmed vectors (2026-04-11):
+    #   v1643279334 — Toronto CMA, Unemployment rate, Seasonally adjusted (preferred)
+    #   v1643279335 — Toronto CMA, Unemployment rate, Unadjusted (fallback)
+    VECTORS = [1643279334, 1643279335]
+    STALE_DAYS = 120
 
-    # ── Source 2: Vector-based endpoint — scan likely vector range ────────────
-    # The new table 14-10-0459-01 vectors are in a different range than old table.
-    # We try the GET series info endpoint to discover the vector for Toronto CMA.
-    SERIES_URL = "https://www150.statcan.gc.ca/t1/wds/rest/getSeriesInfoFromCubePidCoord"
-    for pid, coord in [(1410045901, "35.3.1.1"), (14100294, "23.5.1.1")]:
+    try:
+        r = SESSION.post(
+            WDS_URL,
+            json=[{"vectorId": vid, "latestN": 2} for vid in VECTORS],
+            timeout=8,
+        )
+        r.raise_for_status()
+        items = r.json()
+    except (requests.RequestException, ValueError) as e:
+        return [_err("Toronto Unemployment Rate",
+                     "StatsCan WDS — Table 14-10-0459-01", WDS_URL, str(e))]
+
+    for item, vid in zip(items, VECTORS):
+        if item.get("status") != "SUCCESS":
+            continue
+        obj    = item.get("object", {})
+        points = obj.get("vectorDataPoint", [])
+        if not points:
+            continue
         try:
-            url = f"{SERIES_URL}/{pid}/{coord}"
-            r = SESSION.get(url, timeout=30,
-                            headers={"Accept": "application/json"})
-            r.raise_for_status()
-            data = r.json()
-            if not isinstance(data, list) or not data:
-                continue
-            obj = data[0].get("object", {})
-            if data[0].get("status") != "SUCCESS":
-                continue
-            vid = obj.get("vectorId")
-            if not vid:
-                continue
-            # Now fetch data for this vector
-            vec_url = ("https://www150.statcan.gc.ca/t1/wds/rest/"
-                       f"getDataFromVectorsAndLatestNPeriods/[{{\"vectorId\":{vid},\"latestN\":2}}]")
-            r2 = SESSION.get(vec_url, timeout=30,
-                             headers={"Accept": "application/json"})
-            r2.raise_for_status()
-            vdata = r2.json()
-            if not vdata or vdata[0].get("status") != "SUCCESS":
-                continue
-            points = vdata[0].get("object", {}).get("vectorDataPoint", [])
-            if not points:
-                continue
             rate = float(points[-1]["value"])
-            if not (4.0 <= rate <= 20.0):
+            ref  = points[-1].get("refPer", "unknown")
+            if not (2.0 <= rate <= 25.0):   # sanity check
                 continue
-            ref = points[-1].get("refPer", "unknown")
-            return [_ok("Toronto Unemployment Rate", round(rate, 1), "%",
-                        f"StatsCan LFS — vector v{vid} (Toronto CMA)",
-                        vec_url, ref,
-                        f"3-month moving average, seasonally adjusted. Vector v{vid}. "
-                        f"Released ~5 weeks after reference month. "
-                        f"Pre-tariff baseline (2023): ~6.5%. Alert: >10%.")]
-        except Exception:
+            age_days = 9999
+            try:
+                age_days = (datetime.utcnow() - datetime.fromisoformat(ref[:10])).days
+            except Exception:
+                pass
+            if age_days > STALE_DAYS:
+                continue
+            dtype = "Seasonally adjusted" if vid == 1643279334 else "Unadjusted"
+            return [_ok(
+                "Toronto Unemployment Rate", round(rate, 1), "%",
+                f"StatsCan LFS — Table 14-10-0459-01 (Toronto CMA)",
+                WDS_URL, ref,
+                f"{dtype}. Vector v{vid}. "
+                f"Released ~5 weeks after reference month. "
+                f"Pre-tariff baseline (2023): ~6.5%. "
+                f"Warn: >8.0% (elevated). Alert: >10.0% (recession-level).")]
+        except (ValueError, TypeError):
             continue
 
     return [_err("Toronto Unemployment Rate",
-                 "StatsCan WDS (Tables 14-10-0459-01 / 14-10-0294-01)",
-                 GET_BASE,
-                 "All sources failed. "
+                 "StatsCan WDS — Table 14-10-0459-01",
+                 WDS_URL,
+                 "Vectors v1643279334 / v1643279335 failed or stale. "
                  "Manual: www150.statcan.gc.ca/t1/tbl1/en/tv.action?pid=1410045901")]
 
 
@@ -1550,16 +1517,20 @@ def fetch_statcan_cpi():
     (up to 6 × 30s = 180s). Replaced with a single batched POST for all
     vectors at once with an 8s timeout. One network round-trip instead of six.
 
-    v2.11 FIX: v41693271 (food-at-stores) stale after Jan 2025 (StatsCan
-    basket weight update, June 2025). Added freshness gate (120 days) and
-    fallback vector list — the batch POST returns all; we pick the freshest.
-
-    Vectors batched in single POST:
-      41693271, 41693327, 41693328, 41693329, 41693472 — food-at-stores candidates
-      41690973 — all-items CPI (confirmed working)
+    v2.13 FIX 2026-04-11: All previous food vectors (v41693271 etc.) are dead
+    (404). Confirmed correct vectors via CSV download of table 18-10-0004-01:
+      v41690974 = Food (Canada, all food, 2002=100) — Feb 2026: 200.8
+      v41690975 = Food purchased from stores — Feb 2026: 198.6
+      v41690973 = All-items (Canada) — Feb 2026: 165.9
+    All three now in the batch POST.
     """
     WDS_URL    = "https://www150.statcan.gc.ca/t1/wds/rest/getDataFromVectorsAndLatestNPeriods"
-    FOOD_VIDS  = [41693271, 41693327, 41693328, 41693329, 41693472]
+    # Vectors confirmed live via CSV download 2026-04-11:
+    #   v41690974 = "Food" Canada (all food purchased from stores + restaurants)
+    #   v41690975 = "Food purchased from stores" Canada
+    #   v41690973 = "All-items" Canada
+    # Previous food vectors (v41693271, v41693327 etc.) returned 404 — dead.
+    FOOD_VIDS  = [41690974, 41690975]   # Food, then Food-from-stores as fallback
     ALLITEMS   = 41690973
     STALE_DAYS = 120
     ALL_VIDS   = FOOD_VIDS + [ALLITEMS]
