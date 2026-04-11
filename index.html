@@ -357,7 +357,122 @@
     padding: 8px 14px; font-size: 13px; margin-bottom: 1rem;
   }
   .snapshot-banner a { color: var(--warn); text-decoration: underline; }
-</style>
+
+  /* ── Triage cards ─────────────────────────────────────────────────────── */
+  .triage-wrap {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin-bottom: 1.5rem;
+  }
+  @media (max-width: 640px) { .triage-wrap { grid-template-columns: 1fr; } }
+  .triage-card {
+    background: var(--bg);
+    border-radius: 12px;
+    border: 0.5px solid var(--border2);
+    overflow: hidden;
+  }
+  .triage-header {
+    padding: 9px 14px 7px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 0.5px solid var(--border2);
+  }
+  .triage-hdot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .triage-hdot.alert { background: var(--alert); }
+  .triage-hdot.warn  { background: var(--warn); }
+  .triage-htitle {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--text3);
+  }
+  .triage-section { padding: 4px 0 6px; }
+  .triage-slabel {
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 4px 14px 4px;
+    color: var(--text3);
+  }
+  .triage-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+    padding: 4px 14px;
+    align-items: start;
+  }
+  .triage-name {
+    font-size: 12.5px;
+    color: var(--text1);
+    line-height: 1.3;
+  }
+  .triage-meta {
+    font-size: 11px;
+    color: var(--text3);
+    margin-top: 1px;
+  }
+  .triage-right { text-align: right; }
+  .triage-val {
+    font-size: 12.5px;
+    font-weight: 500;
+    display: block;
+    white-space: nowrap;
+  }
+  .triage-val.alert { color: var(--alert); }
+  .triage-val.warn  { color: var(--warn); }
+  .triage-val.alert-sustained { color: #791F1F; }
+  .triage-val.warn-sustained  { color: #633806; }
+  @media (prefers-color-scheme: dark) {
+    .triage-val.alert-sustained { color: #F7C1C1; }
+    .triage-val.warn-sustained  { color: #FAC775; }
+  }
+  .triage-date {
+    font-size: 10.5px;
+    color: var(--text3);
+    display: block;
+    margin-top: 1px;
+    white-space: nowrap;
+  }
+  .tier-pill {
+    display: inline-block;
+    font-size: 9.5px;
+    font-weight: 500;
+    padding: 1px 4px;
+    border-radius: 4px;
+    margin-left: 3px;
+    background: var(--bg2);
+    color: var(--text3);
+    vertical-align: middle;
+  }
+  .triage-divider { height: 0.5px; margin: 2px 14px; background: var(--border2); }
+  .sustained-section-alert {
+    background: #FCEBEB;
+  }
+  .sustained-section-warn {
+    background: #FAEEDA;
+  }
+  .sustained-section-alert .triage-slabel { color: #A32D2D; }
+  .sustained-section-warn  .triage-slabel { color: #854F0B; }
+  .sustained-section-alert .triage-meta   { color: #A32D2D; opacity: 0.7; }
+  .sustained-section-warn  .triage-meta   { color: #854F0B; opacity: 0.7; }
+  @media (prefers-color-scheme: dark) {
+    .sustained-section-alert { background: #501313; }
+    .sustained-section-warn  { background: #412402; }
+    .sustained-section-alert .triage-slabel { color: #F09595; }
+    .sustained-section-warn  .triage-slabel { color: #FAC775; }
+    .sustained-section-alert .triage-meta   { color: #F09595; opacity: 0.7; }
+    .sustained-section-warn  .triage-meta   { color: #FAC775; opacity: 0.7; }
+  }
+
+  </style>
 </head>
 <body>
 
@@ -379,6 +494,7 @@
   <div id="dashboard" style="display:none">
     <div class="summary-bar" id="summary-bar"></div>
     <div id="alert-banners"></div>
+    <div id="triage-wrap" class="triage-wrap" style="display:none"></div>
     <div class="legend">
       <span class="legend-item"><span class="legend-dot dot-ok"></span>normal</span>
       <span class="legend-item"><span class="legend-dot dot-warn"></span>watch</span>
@@ -1105,6 +1221,79 @@ async function loadBrief(isAlert) {
 }
 
 
+function renderTriageCards(results) {
+  const wrap = document.getElementById("triage-wrap");
+  if(!wrap) return;
+  const SUSTAINED_DAYS = 14;
+  const today = new Date();
+  const SECTOR_LABELS_SHORT = {
+    energy:"Energy",water:"Water",health:"Health",
+    transport_logistics:"Transport & logistics",financial:"Financial",
+    public_safety:"Public safety",environment:"Environment",
+    food:"Food & prices",housing:"Housing"
+  };
+  const SECTOR_ORDER_IDX = ["energy","water","health","transport_logistics",
+                             "financial","public_safety","environment","food","housing"];
+  function isSustained(r) {
+    const dd = r.data_date||""; if(!dd) return false;
+    try { return (today - new Date(dd.slice(0,10)))/86400000 >= SUSTAINED_DAYS; }
+    catch(e) { return false; }
+  }
+  function getSector(r) {
+    const ti = lookupTier(r.indicator);
+    return r.sector||(ti&&ti.sector)||inferSector(r.indicator)||"other";
+  }
+  function getTier(r) { const ti=lookupTier(r.indicator); return ti?ti.tier:null; }
+  function sortPriority(a,b) {
+    const sa=SECTOR_ORDER_IDX.indexOf(getSector(a)),sb=SECTOR_ORDER_IDX.indexOf(getSector(b));
+    const sd=(sa===-1?99:sa)-(sb===-1?99:sb); if(sd!==0) return sd;
+    return (getTier(a)||9)-(getTier(b)||9);
+  }
+  function fmtDate(r) { return (r.data_date||"").slice(0,10); }
+  function buildSection(items,statusCls,sustained) {
+    if(!items.length) return "";
+    const sc = sustained?"sustained-section-"+statusCls:"";
+    const lbl = sustained?"Sustained":"New / escalating";
+    const vc  = sustained?statusCls+"-sustained":statusCls;
+    const rows = items.map(r=>{
+      const sl = SECTOR_LABELS_SHORT[getSector(r)]||getSector(r);
+      const t  = getTier(r);
+      const tb = t?'<span class="tier-pill">T'+t+'</span>':"";
+      const v  = fmtValue(r); const u=r.unit||"";
+      const dv = u?(v+" "+u).trim():v;
+      const dt = fmtDate(r);
+      return '<div class="triage-row">'+
+        '<div><span class="triage-name">'+escHtml(r.indicator)+tb+'</span>'+
+        '<span class="triage-meta">'+escHtml(sl)+'</span></div>'+
+        '<div class="triage-right">'+
+        '<span class="triage-val '+vc+'">'+escHtml(dv)+'</span>'+
+        '<span class="triage-date">'+escHtml(dt)+'</span></div></div>';
+    }).join("");
+    return '<div class="triage-section '+sc+'"><div class="triage-slabel">'+lbl+'</div>'+rows+'</div>';
+  }
+  function buildTriageCard(statusCls,title,items) {
+    if(!items.length) return "";
+    const fresh     = items.filter(r=>!isSustained(r)).sort(sortPriority);
+    const sustained = items.filter(r=> isSustained(r)).sort(sortPriority);
+    const fs = buildSection(fresh,statusCls,false);
+    const ss = buildSection(sustained,statusCls,true);
+    const div= (fresh.length&&sustained.length)?'<div class="triage-divider"></div>':"";
+    return '<div class="triage-card">'+
+      '<div class="triage-header">'+
+      '<div class="triage-hdot '+statusCls+'"></div>'+
+      '<span class="triage-htitle">'+title+'</span></div>'+
+      fs+div+ss+'</div>';
+  }
+  const ai = results.filter(r=>r.status==="alert"&&r.value!==null);
+  const wi = results.filter(r=>r.status==="warn" &&r.value!==null);
+  const ac = buildTriageCard("alert","Active alerts",ai);
+  const wc = buildTriageCard("warn","Watch conditions",wi);
+  if(!ac&&!wc){wrap.style.display="none";return;}
+  wrap.innerHTML=ac+wc;
+  wrap.style.display="grid";
+}
+
+
 function render(data) {
   const results = data.results || [];
   const t = data.totals || {};
@@ -1124,6 +1313,7 @@ function render(data) {
 
   document.getElementById("loading").style.display = "none";
   document.getElementById("dashboard").style.display = "block";
+  renderTriageCards(results);
   document.getElementById("topbar-sub").textContent = rdDisp;
 
   const dot = document.getElementById("status-dot");
