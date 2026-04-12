@@ -1,7 +1,29 @@
 {
-  "generated_at": "2026-04-05T08:52:45Z",
-  "count": 2,
+  "generated_at": "2026-04-12T08:57:00Z",
+  "count": 3,
   "weeks": [
+    {
+      "week": "2026-W15",
+      "data_date": "2026-04-12",
+      "run_ts": "2026-04-12T08:57:00.195195Z",
+      "data_file": "tii_data_weekly_2026-W15.json",
+      "brief_file": "archive/tii_brief_2026-W15.md",
+      "brief_intro": "",
+      "totals": {
+        "ok": 34,
+        "warn": 7,
+        "alert": 5,
+        "error": 0,
+        "manual": 15
+      },
+      "alerts": [
+        "Dawn Hub Gas Storage (Ontario) (90.0 PJ)",
+        "Wastewater Signal — COVID-19 (SARS-CoV-2) (3 High)",
+        "Wastewater Signal — Influenza B (3 High)",
+        "Wastewater Signal — RSV (3 High)",
+        "Grocery Price Inflation (Food CPI) (200.8 CPI index (2002=100))"
+      ]
+    },
     {
       "week": "2026-W14",
       "data_date": "2026-04-05",
