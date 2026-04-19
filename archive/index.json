@@ -1,7 +1,26 @@
 {
-  "generated_at": "2026-04-12T08:57:00Z",
-  "count": 3,
+  "generated_at": "2026-04-19T09:00:49Z",
+  "count": 4,
   "weeks": [
+    {
+      "week": "2026-W16",
+      "data_date": "2026-04-19",
+      "run_ts": "2026-04-19T09:00:49.035740Z",
+      "data_file": "tii_data_weekly_2026-W16.json",
+      "brief_file": "archive/tii_brief_2026-W16.md",
+      "brief_intro": "",
+      "totals": {
+        "ok": 37,
+        "warn": 6,
+        "alert": 2,
+        "error": 0,
+        "manual": 15
+      },
+      "alerts": [
+        "Wastewater Signal — Influenza B (3 High)",
+        "Grocery Price Inflation (Food CPI) (200.8 CPI index (2002=100))"
+      ]
+    },
     {
       "week": "2026-W15",
       "data_date": "2026-04-12",
