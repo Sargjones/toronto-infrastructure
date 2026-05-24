@@ -1,7 +1,26 @@
 {
-  "generated_at": "2026-05-17T09:52:13Z",
-  "count": 8,
+  "generated_at": "2026-05-24T10:00:26Z",
+  "count": 9,
   "weeks": [
+    {
+      "week": "2026-W21",
+      "data_date": "2026-05-24",
+      "run_ts": "2026-05-24T10:00:26.716873Z",
+      "data_file": "tii_data_weekly_2026-W21.json",
+      "brief_file": "archive/tii_brief_2026-W21.md",
+      "brief_intro": "",
+      "totals": {
+        "ok": 35,
+        "warn": 9,
+        "alert": 2,
+        "error": 0,
+        "manual": 15
+      },
+      "alerts": [
+        "Grocery Price Inflation (Food CPI) (201.3 CPI index (2002=100))",
+        "Pearson Weather Impact (3 (LIFR))"
+      ]
+    },
     {
       "week": "2026-W20",
       "data_date": "2026-05-17",
