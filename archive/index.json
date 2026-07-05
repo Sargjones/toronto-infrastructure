@@ -1,7 +1,26 @@
 {
-  "generated_at": "2026-06-28T10:31:48Z",
-  "count": 14,
+  "generated_at": "2026-07-05T10:21:43Z",
+  "count": 15,
   "weeks": [
+    {
+      "week": "2026-W27",
+      "data_date": "2026-07-05",
+      "run_ts": "2026-07-05T10:21:43.227753Z",
+      "data_file": "tii_data_weekly_2026-W27.json",
+      "brief_file": "archive/tii_brief_2026-W27.md",
+      "brief_intro": "",
+      "totals": {
+        "ok": 36,
+        "warn": 5,
+        "alert": 2,
+        "error": 1,
+        "manual": 15
+      },
+      "alerts": [
+        "Gas Output (MW) (6306.0 MW)",
+        "Grocery Price Inflation (Food CPI) (202.8 CPI index (2002=100))"
+      ]
+    },
     {
       "week": "2026-W26",
       "data_date": "2026-06-28",
