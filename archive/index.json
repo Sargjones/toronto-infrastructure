@@ -1,7 +1,25 @@
 {
-  "generated_at": "2026-07-19T09:56:01Z",
-  "count": 17,
+  "generated_at": "2026-07-26T10:05:51Z",
+  "count": 18,
   "weeks": [
+    {
+      "week": "2026-W30",
+      "data_date": "2026-07-26",
+      "run_ts": "2026-07-26T10:05:51.035633Z",
+      "data_file": "tii_data_weekly_2026-W30.json",
+      "brief_file": "archive/tii_brief_2026-W30.md",
+      "brief_intro": "",
+      "totals": {
+        "ok": 34,
+        "warn": 7,
+        "alert": 1,
+        "error": 2,
+        "manual": 15
+      },
+      "alerts": [
+        "Grocery Price Inflation (Food CPI) (202.4 CPI index (2002=100))"
+      ]
+    },
     {
       "week": "2026-W29",
       "data_date": "2026-07-19",
