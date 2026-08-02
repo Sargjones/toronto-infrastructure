@@ -1,7 +1,27 @@
 {
-  "generated_at": "2026-07-26T10:05:51Z",
-  "count": 18,
+  "generated_at": "2026-08-02T10:01:49Z",
+  "count": 19,
   "weeks": [
+    {
+      "week": "2026-W31",
+      "data_date": "2026-08-02",
+      "run_ts": "2026-08-02T10:01:48.977923Z",
+      "data_file": "tii_data_weekly_2026-W31.json",
+      "brief_file": "archive/tii_brief_2026-W31.md",
+      "brief_intro": "",
+      "totals": {
+        "ok": 38,
+        "warn": 4,
+        "alert": 3,
+        "error": 1,
+        "manual": 15
+      },
+      "alerts": [
+        "Gas Output (MW) (6137.0 MW)",
+        "Active Watermain Breaks (5 emergency repairs)",
+        "Grocery Price Inflation (Food CPI) (202.4 CPI index (2002=100))"
+      ]
+    },
     {
       "week": "2026-W30",
       "data_date": "2026-07-26",
