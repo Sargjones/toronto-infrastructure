@@ -1,7 +1,28 @@
 {
-  "generated_at": "2026-08-30T13:42:25Z",
-  "count": 23,
+  "generated_at": "2026-09-06T12:03:03Z",
+  "count": 24,
   "weeks": [
+    {
+      "week": "2026-W36",
+      "data_date": "2026-09-06",
+      "run_ts": "2026-09-06T12:03:03.246814Z",
+      "data_file": "tii_data_weekly_2026-W36.json",
+      "brief_file": "archive/tii_brief_2026-W36.md",
+      "brief_intro": "",
+      "totals": {
+        "ok": 37,
+        "warn": 4,
+        "alert": 4,
+        "error": 0,
+        "manual": 15
+      },
+      "alerts": [
+        "Fuel Price — Toronto (187.9 ¢/L)",
+        "Active Water Outages (19 active outages)",
+        "Active Watermain Breaks (14 emergency repairs)",
+        "Grocery Price Inflation (Food CPI) (202.8 CPI index (2002=100))"
+      ]
+    },
     {
       "week": "2026-W35",
       "data_date": "2026-08-30",
