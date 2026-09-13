@@ -1,7 +1,27 @@
 {
-  "generated_at": "2026-09-06T12:03:03Z",
-  "count": 24,
+  "generated_at": "2026-09-13T13:13:31Z",
+  "count": 25,
   "weeks": [
+    {
+      "week": "2026-W37",
+      "data_date": "2026-09-13",
+      "run_ts": "2026-09-13T13:13:30.995093Z",
+      "data_file": "tii_data_weekly_2026-W37.json",
+      "brief_file": "archive/tii_brief_2026-W37.md",
+      "brief_intro": "",
+      "totals": {
+        "ok": 35,
+        "warn": 6,
+        "alert": 3,
+        "error": 0,
+        "manual": 15
+      },
+      "alerts": [
+        "Active Water Outages (21 active outages)",
+        "Active Watermain Breaks (16 emergency repairs)",
+        "Grocery Price Inflation (Food CPI) (202.8 CPI index (2002=100))"
+      ]
+    },
     {
       "week": "2026-W36",
       "data_date": "2026-09-06",
