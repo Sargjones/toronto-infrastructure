@@ -1,7 +1,27 @@
 {
-  "generated_at": "2026-09-27T13:44:32Z",
-  "count": 27,
+  "generated_at": "2026-10-04T13:51:09Z",
+  "count": 28,
   "weeks": [
+    {
+      "week": "2026-W40",
+      "data_date": "2026-10-04",
+      "run_ts": "2026-10-04T13:51:08.976962Z",
+      "data_file": "tii_data_weekly_2026-W40.json",
+      "brief_file": "archive/tii_brief_2026-W40.md",
+      "brief_intro": "",
+      "totals": {
+        "ok": 34,
+        "warn": 7,
+        "alert": 3,
+        "error": 0,
+        "manual": 15
+      },
+      "alerts": [
+        "Fuel Price — Toronto (186.9 ¢/L)",
+        "Wastewater Signal — COVID-19 (SARS-CoV-2) (3 High)",
+        "Grocery Price Inflation (Food CPI) (202.4 CPI index (2002=100))"
+      ]
+    },
     {
       "week": "2026-W39",
       "data_date": "2026-09-27",
