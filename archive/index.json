@@ -1,7 +1,29 @@
 {
-  "generated_at": "2026-10-18T12:32:03Z",
-  "count": 30,
+  "generated_at": "2026-10-25T13:06:37Z",
+  "count": 31,
   "weeks": [
+    {
+      "week": "2026-W43",
+      "data_date": "2026-10-25",
+      "run_ts": "2026-10-25T13:06:37.443476Z",
+      "data_file": "tii_data_weekly_2026-W43.json",
+      "brief_file": "archive/tii_brief_2026-W43.md",
+      "brief_intro": "",
+      "totals": {
+        "ok": 27,
+        "warn": 6,
+        "alert": 5,
+        "error": 3,
+        "manual": 15
+      },
+      "alerts": [
+        "Active Water Outages (15 active outages)",
+        "Active Watermain Breaks (12 emergency repairs)",
+        "Wastewater Signal — COVID-19 (SARS-CoV-2) (3 High)",
+        "Grocery Price Inflation (Food CPI) (201.8 CPI index (2002=100))",
+        "Pearson Weather Impact (2 (IFR))"
+      ]
+    },
     {
       "week": "2026-W42",
       "data_date": "2026-10-18",
